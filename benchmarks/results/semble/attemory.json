@@ -1,0 +1,512 @@
+{
+  "tool": "attemory",
+  "repos": [
+    {
+      "repo": "abseil-cpp",
+      "language": "cpp",
+      "ndcg10": 0.975,
+      "p50_ms": 21331.098357914016,
+      "index_ms": 0.0,
+      "memories": 9938
+    },
+    {
+      "repo": "aeson",
+      "language": "haskell",
+      "ndcg10": 0.9114165604738691,
+      "p50_ms": 441.3940970553085,
+      "index_ms": 0.0,
+      "memories": 480
+    },
+    {
+      "repo": "aiohttp",
+      "language": "python",
+      "ndcg10": 0.9656862697084282,
+      "p50_ms": 622.8803480044007,
+      "index_ms": 0.0,
+      "memories": 906
+    },
+    {
+      "repo": "alamofire",
+      "language": "swift",
+      "ndcg10": 0.9455041648625848,
+      "p50_ms": 518.7891910318285,
+      "index_ms": 0.0,
+      "memories": 599
+    },
+    {
+      "repo": "axios",
+      "language": "javascript",
+      "ndcg10": 0.9268415478476942,
+      "p50_ms": 160.6864109635353,
+      "index_ms": 0.0,
+      "memories": 239
+    },
+    {
+      "repo": "axum",
+      "language": "rust",
+      "ndcg10": 0.8930676558073394,
+      "p50_ms": 483.6131309857592,
+      "index_ms": 0.0,
+      "memories": 714
+    },
+    {
+      "repo": "bash-it",
+      "language": "bash",
+      "ndcg10": 0.7672762739560136,
+      "p50_ms": 655.1582990214229,
+      "index_ms": 0.0,
+      "memories": 995
+    },
+    {
+      "repo": "bats-core",
+      "language": "bash",
+      "ndcg10": 0.9011859507142915,
+      "p50_ms": 84.95639497414231,
+      "index_ms": 0.0,
+      "memories": 58
+    },
+    {
+      "repo": "cats",
+      "language": "scala",
+      "ndcg10": 0.9959860394574094,
+      "p50_ms": 2459.047693060711,
+      "index_ms": 0.0,
+      "memories": 1448
+    },
+    {
+      "repo": "chi",
+      "language": "go",
+      "ndcg10": 0.9705761851037684,
+      "p50_ms": 283.0849380698055,
+      "index_ms": 0.0,
+      "memories": 378
+    },
+    {
+      "repo": "circe",
+      "language": "scala",
+      "ndcg10": 0.9223010007518858,
+      "p50_ms": 204.57138295751065,
+      "index_ms": 0.0,
+      "memories": 241
+    },
+    {
+      "repo": "click",
+      "language": "python",
+      "ndcg10": 0.9446394630357187,
+      "p50_ms": 284.8386049736291,
+      "index_ms": 0.0,
+      "memories": 383
+    },
+    {
+      "repo": "cobra",
+      "language": "go",
+      "ndcg10": 0.9814245367034931,
+      "p50_ms": 439.6339310333133,
+      "index_ms": 0.0,
+      "memories": 577
+    },
+    {
+      "repo": "commons-lang",
+      "language": "java",
+      "ndcg10": 0.9640036641112818,
+      "p50_ms": 5381.17562700063,
+      "index_ms": 0.0,
+      "memories": 3559
+    },
+    {
+      "repo": "curl",
+      "language": "c",
+      "ndcg10": 0.849019670663399,
+      "p50_ms": 8016.517170006409,
+      "index_ms": 0.0,
+      "memories": 5817
+    },
+    {
+      "repo": "dapper",
+      "language": "csharp",
+      "ndcg10": 0.8077324383928645,
+      "p50_ms": 330.8011300396174,
+      "index_ms": 0.0,
+      "memories": 365
+    },
+    {
+      "repo": "ecto",
+      "language": "elixir",
+      "ndcg10": 0.9736842105263158,
+      "p50_ms": 1834.837504895404,
+      "index_ms": 0.0,
+      "memories": 1113
+    },
+    {
+      "repo": "exposed",
+      "language": "kotlin",
+      "ndcg10": 0.8353753963003305,
+      "p50_ms": 590.7837660051882,
+      "index_ms": 0.0,
+      "memories": 764
+    },
+    {
+      "repo": "express",
+      "language": "javascript",
+      "ndcg10": 0.9938607657669024,
+      "p50_ms": 90.06387705449015,
+      "index_ms": 0.0,
+      "memories": 95
+    },
+    {
+      "repo": "fastapi",
+      "language": "python",
+      "ndcg10": 0.8811888093922275,
+      "p50_ms": 429.9538859631866,
+      "index_ms": 0.0,
+      "memories": 681
+    },
+    {
+      "repo": "flask",
+      "language": "python",
+      "ndcg10": 0.931242784377657,
+      "p50_ms": 263.8736080843955,
+      "index_ms": 0.0,
+      "memories": 331
+    },
+    {
+      "repo": "fmtlib",
+      "language": "cpp",
+      "ndcg10": 0.8542662662965341,
+      "p50_ms": 552.2827720269561,
+      "index_ms": 0.0,
+      "memories": 559
+    },
+    {
+      "repo": "gin",
+      "language": "go",
+      "ndcg10": 0.8793107832165823,
+      "p50_ms": 598.1100399512798,
+      "index_ms": 0.0,
+      "memories": 849
+    },
+    {
+      "repo": "gson",
+      "language": "java",
+      "ndcg10": 0.9477092107517304,
+      "p50_ms": 2019.6482460014522,
+      "index_ms": 0.0,
+      "memories": 1751
+    },
+    {
+      "repo": "guzzle",
+      "language": "php",
+      "ndcg10": 0.9526859793989054,
+      "p50_ms": 191.54300796799362,
+      "index_ms": 0.0,
+      "memories": 242
+    },
+    {
+      "repo": "http4s",
+      "language": "scala",
+      "ndcg10": 0.8758518174656252,
+      "p50_ms": 1976.1554510332644,
+      "index_ms": 0.0,
+      "memories": 1104
+    },
+    {
+      "repo": "httpx",
+      "language": "python",
+      "ndcg10": 0.9555112363727283,
+      "p50_ms": 230.034940992482,
+      "index_ms": 0.0,
+      "memories": 306
+    },
+    {
+      "repo": "jackson-databind",
+      "language": "java",
+      "ndcg10": 0.805762612742648,
+      "p50_ms": 6138.142863987014,
+      "index_ms": 0.0,
+      "memories": 5062
+    },
+    {
+      "repo": "kotlinx-coroutines",
+      "language": "kotlin",
+      "ndcg10": 0.9139821033974457,
+      "p50_ms": 1839.0741850016639,
+      "index_ms": 0.0,
+      "memories": 966
+    },
+    {
+      "repo": "ktor",
+      "language": "kotlin",
+      "ndcg10": 0.9002278907928101,
+      "p50_ms": 368.00122004933655,
+      "index_ms": 0.0,
+      "memories": 517
+    },
+    {
+      "repo": "laravel-framework",
+      "language": "php",
+      "ndcg10": 0.8713932929028847,
+      "p50_ms": 8600.529809948057,
+      "index_ms": 0.0,
+      "memories": 9316
+    },
+    {
+      "repo": "lazy.nvim",
+      "language": "lua",
+      "ndcg10": 0.9008446111202518,
+      "p50_ms": 347.2862939815968,
+      "index_ms": 0.0,
+      "memories": 471
+    },
+    {
+      "repo": "libuv",
+      "language": "c",
+      "ndcg10": 0.8450984880446922,
+      "p50_ms": 2493.351525045,
+      "index_ms": 0.0,
+      "memories": 1984
+    },
+    {
+      "repo": "messagepack-csharp",
+      "language": "csharp",
+      "ndcg10": 0.9437689302734242,
+      "p50_ms": 1815.651350072585,
+      "index_ms": 0.0,
+      "memories": 1223
+    },
+    {
+      "repo": "mini.nvim",
+      "language": "lua",
+      "ndcg10": 1.0,
+      "p50_ms": 4971.4836640050635,
+      "index_ms": 0.0,
+      "memories": 2231
+    },
+    {
+      "repo": "model2vec",
+      "language": "python",
+      "ndcg10": 0.815614173110873,
+      "p50_ms": 115.05061003845185,
+      "index_ms": 0.0,
+      "memories": 108
+    },
+    {
+      "repo": "monolog",
+      "language": "php",
+      "ndcg10": 0.9535035422213822,
+      "p50_ms": 354.7395889181644,
+      "index_ms": 0.0,
+      "memories": 549
+    },
+    {
+      "repo": "newtonsoft-json",
+      "language": "csharp",
+      "ndcg10": 0.8819537411240482,
+      "p50_ms": 2977.1782680181786,
+      "index_ms": 0.0,
+      "memories": 2438
+    },
+    {
+      "repo": "nlohmann-json",
+      "language": "cpp",
+      "ndcg10": 0.9064718665292236,
+      "p50_ms": 2011.9777530198917,
+      "index_ms": 0.0,
+      "memories": 883
+    },
+    {
+      "repo": "nvm",
+      "language": "bash",
+      "ndcg10": 1.0,
+      "p50_ms": 203.00575299188495,
+      "index_ms": 0.0,
+      "memories": 196
+    },
+    {
+      "repo": "pandoc",
+      "language": "haskell",
+      "ndcg10": 0.844342640361727,
+      "p50_ms": 6032.866001012735,
+      "index_ms": 0.0,
+      "memories": 3375
+    },
+    {
+      "repo": "phoenix",
+      "language": "elixir",
+      "ndcg10": 0.9336088648149914,
+      "p50_ms": 593.4685650281608,
+      "index_ms": 0.0,
+      "memories": 825
+    },
+    {
+      "repo": "plug",
+      "language": "elixir",
+      "ndcg10": 0.9446394630357187,
+      "p50_ms": 381.45015900954604,
+      "index_ms": 0.0,
+      "memories": 360
+    },
+    {
+      "repo": "pydantic",
+      "language": "python",
+      "ndcg10": 0.7819096580511847,
+      "p50_ms": 2195.8692780463025,
+      "index_ms": 0.0,
+      "memories": 1592
+    },
+    {
+      "repo": "rack",
+      "language": "ruby",
+      "ndcg10": 0.9794960974206366,
+      "p50_ms": 254.9937239382416,
+      "index_ms": 0.0,
+      "memories": 314
+    },
+    {
+      "repo": "rails",
+      "language": "ruby",
+      "ndcg10": 0.894268019212378,
+      "p50_ms": 409.58235797006637,
+      "index_ms": 0.0,
+      "memories": 606
+    },
+    {
+      "repo": "redis",
+      "language": "c",
+      "ndcg10": 1.0,
+      "p50_ms": 14616.01012002211,
+      "index_ms": 0.0,
+      "memories": 6562
+    },
+    {
+      "repo": "redux",
+      "language": "javascript",
+      "ndcg10": 0.9131562671242401,
+      "p50_ms": 78.7201700732112,
+      "index_ms": 0.0,
+      "memories": 62
+    },
+    {
+      "repo": "requests",
+      "language": "python",
+      "ndcg10": 0.955657359638273,
+      "p50_ms": 165.5670889886096,
+      "index_ms": 0.0,
+      "memories": 198
+    },
+    {
+      "repo": "serde",
+      "language": "rust",
+      "ndcg10": 0.9132994354616668,
+      "p50_ms": 1846.7951660277322,
+      "index_ms": 0.0,
+      "memories": 1547
+    },
+    {
+      "repo": "sinatra",
+      "language": "ruby",
+      "ndcg10": 0.9446394630357187,
+      "p50_ms": 101.08513501472771,
+      "index_ms": 0.0,
+      "memories": 99
+    },
+    {
+      "repo": "snapkit",
+      "language": "swift",
+      "ndcg10": 0.8602229844896789,
+      "p50_ms": 122.73980502504855,
+      "index_ms": 0.0,
+      "memories": 139
+    },
+    {
+      "repo": "starlette",
+      "language": "python",
+      "ndcg10": 0.9393473516919484,
+      "p50_ms": 201.8268620595336,
+      "index_ms": 0.0,
+      "memories": 234
+    },
+    {
+      "repo": "telescope.nvim",
+      "language": "lua",
+      "ndcg10": 0.9021855095260752,
+      "p50_ms": 475.1015070360154,
+      "index_ms": 0.0,
+      "memories": 689
+    },
+    {
+      "repo": "tokio",
+      "language": "rust",
+      "ndcg10": 0.9359836636080026,
+      "p50_ms": 4335.187511052936,
+      "index_ms": 0.0,
+      "memories": 3642
+    },
+    {
+      "repo": "trpc",
+      "language": "typescript",
+      "ndcg10": 0.7939282626258564,
+      "p50_ms": 324.3148389738053,
+      "index_ms": 0.0,
+      "memories": 535
+    },
+    {
+      "repo": "vapor",
+      "language": "swift",
+      "ndcg10": 0.8956608526260746,
+      "p50_ms": 596.1482949787751,
+      "index_ms": 0.0,
+      "memories": 828
+    },
+    {
+      "repo": "vitest",
+      "language": "typescript",
+      "ndcg10": 0.737707118843058,
+      "p50_ms": 1670.8397429902107,
+      "index_ms": 0.0,
+      "memories": 1432
+    },
+    {
+      "repo": "xmonad",
+      "language": "haskell",
+      "ndcg10": 0.9221719901717009,
+      "p50_ms": 147.23466499708593,
+      "index_ms": 0.0,
+      "memories": 122
+    },
+    {
+      "repo": "zig",
+      "language": "zig",
+      "ndcg10": 0.9565464876785729,
+      "p50_ms": 100173.41021704488,
+      "index_ms": 0.0,
+      "memories": 14816
+    },
+    {
+      "repo": "zig-clap",
+      "language": "zig",
+      "ndcg10": 0.9508891280402999,
+      "p50_ms": 124.40578103996813,
+      "index_ms": 0.0,
+      "memories": 116
+    },
+    {
+      "repo": "zls",
+      "language": "zig",
+      "ndcg10": 0.9144532413158946,
+      "p50_ms": 2130.782581982203,
+      "index_ms": 0.0,
+      "memories": 1334
+    },
+    {
+      "repo": "zod",
+      "language": "typescript",
+      "ndcg10": 0.5908164448997665,
+      "p50_ms": 3260.1493520196527,
+      "index_ms": 0.0,
+      "memories": 2336
+    }
+  ],
+  "avg_ndcg10": 0.9055,
+  "avg_p50_ms": 3538.9,
+  "avg_index_ms": 0.0
+}

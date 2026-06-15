@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attemory"
+dynamic = ["version"]
+description = "Attention-native memory retrieval for local LLM applications."
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  {name = "Attemory contributors"},
+]
+keywords = [
+  "attention",
+  "memory",
+  "retrieval",
+  "kv-cache",
+  "llm",
+  "rag",
+  "mcp",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "requests>=2.31,<3",
+  "attemory-runtime-macos-metal==0.1.0; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.9,<2"]
+cpu = ["attemory-runtime-linux-cpu==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+gpu = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+cuda = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+cuda-cu121 = ["attemory-runtime-linux-cuda-cu121==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+cuda-cu124 = ["attemory-runtime-linux-cuda-cu124==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+cuda-cu126 = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+cuda-cu129 = ["attemory-runtime-linux-cuda-cu129==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+metal = ["attemory-runtime-macos-metal==0.1.0; platform_system == 'Darwin' and platform_machine == 'arm64'"]
+linux-cpu = ["attemory-runtime-linux-cpu==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-cuda-cu121 = ["attemory-runtime-linux-cuda-cu121==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-cuda-cu124 = ["attemory-runtime-linux-cuda-cu124==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-cuda-cu126 = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-cuda-cu129 = ["attemory-runtime-linux-cuda-cu129==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-gpu-cu121 = ["attemory-runtime-linux-cuda-cu121==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-gpu-cu124 = ["attemory-runtime-linux-cuda-cu124==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-gpu-cu126 = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+linux-gpu-cu129 = ["attemory-runtime-linux-cuda-cu129==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
+macos-metal = ["attemory-runtime-macos-metal==0.1.0; platform_system == 'Darwin' and platform_machine == 'arm64'"]
+
+[project.scripts]
+attemory = "attemory.cli:main"
+attemory-mcp = "attemory.mcp:main"
+attemory-server = "attemory.server:main"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
+exclude = ["tests", "tests.*"]
+namespaces = false
+
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}

@@ -1,0 +1,906 @@
+diff --git a/benchmarks/baselines/attemory.py b/benchmarks/baselines/attemory.py
+new file mode 100644
+index 0000000..69eabcd
+--- /dev/null
++++ b/benchmarks/baselines/attemory.py
+@@ -0,0 +1,900 @@
++from __future__ import annotations
++
++import argparse
++import json
++import math
++import os
++import sys
++import time
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++from benchmarks.data import (
++    ANNOTATIONS_DIR,
++    RepoSpec,
++    Target,
++    Task,
++    add_filter_args,
++    apply_task_filters,
++    grouped_tasks,
++    infer_category,
++    load_filtered_tasks,
++    load_repo_specs,
++    path_matches,
++    results_path,
++)
++
++
++def _import_attemory() -> type:
++    try:
++        from attemory import AttemoryClient
++
++        return AttemoryClient
++    except ModuleNotFoundError:
++        root_value = os.environ.get("ATTEMORY_ROOT", "~/work/memory/attemory")
++        python_root = Path(root_value).expanduser() / "python"
++        if python_root.is_dir() and str(python_root) not in sys.path:
++            sys.path.insert(0, str(python_root))
++        from attemory import AttemoryClient
++
++        return AttemoryClient
++
++
++AttemoryClient = _import_attemory()
++
++
++SEARCH_SYSTEM_PROMPT = "Read the following code carefully and find the most relevant code to the query."
++RERANK_SYSTEM_PROMPT = (
++    "Rank the selected code snippets by how directly they answer the query. Prefer snippets "
++    "that contain the requested source implementation or definition. Prefer production source "
++    "over tests, examples, documentation, and generated files unless the query explicitly asks for them."
++)
++QUERY_CONTEXT_PROMPT = (
++    "Read the selected code snippets carefully and answer the user's query: {question}. "
++    "Treat the query as code navigation. Rank snippets by how directly they define, declare, "
++    "implement, export, or explain the requested symbol, API, behavior, or feature. Prefer exact "
++    "identifier matches and concrete implementation or definition code over snippets that only "
++    "mention, call, wrap, test, or document it. Prefer production source over tests, examples, "
++    "documentation, and generated files unless the query explicitly asks for them."
++)
++
++DEFAULT_CODE_SUFFIXES = {
++    ".bash",
++    ".c",
++    ".cc",
++    ".cmake",
++    ".cpp",
++    ".cs",
++    ".css",
++    ".cts",
++    ".cxx",
++    ".ex",
++    ".exs",
++    ".go",
++    ".h",
++    ".hh",
++    ".hpp",
++    ".hs",
++    ".htm",
++    ".html",
++    ".hxx",
++    ".java",
++    ".js",
++    ".jsx",
++    ".kt",
++    ".kts",
++    ".less",
++    ".lhs",
++    ".lua",
++    ".mjs",
++    ".mts",
++    ".php",
++    ".py",
++    ".pyi",
++    ".rb",
++    ".rs",
++    ".sass",
++    ".sc",
++    ".scala",
++    ".scss",
++    ".sh",
++    ".svelte",
++    ".swift",
++    ".ts",
++    ".tsx",
++    ".vue",
++    ".zig",
++}
++SPECIAL_CODE_FILENAMES = {"CMakeLists.txt"}
++SKIP_DIRS = {
++    ".git",
++    ".hg",
++    ".mypy_cache",
++    ".pytest_cache",
++    ".ruff_cache",
++    ".svn",
++    ".tox",
++    ".venv",
++    "__pycache__",
++    "build",
++    "dist",
++    "node_modules",
++    "venv",
++}
++
++INDEX_FILE = "index.json"
++MAP_FILE = "chunks.jsonl"
++FILE_HEADER_PREFIX = "// the following code come from "
++TARGET_LINES_PER_BLOCK = 30
++BLANK_LINE_SEARCH_WINDOW = 10
++FILE_MIN_REMAINING_TOKENS = 5000
++DEFAULT_TOP_K = 10
++DEFAULT_SEARCH_TOPK = 50
++DEFAULT_LATENCY_RUNS = 1
++DEFAULT_INDEX_ROOT = Path.home() / ".cache" / "attemory-semble"
++FILE_AGGREGATION_MODE = "sum"
++FILE_AGGREGATION_MAX_HITS = 2
++FILE_AGGREGATION_EXTRA_WEIGHT = 0.25
++
++
++@dataclass(frozen=True)
++class CodeChunk:
++    id: str
++    file: str
++    start_line: int
++    end_line: int
++    text: str
++
++    @property
++    def lines(self) -> str:
++        return f"{self.start_line}-{self.end_line}"
++
++    @property
++    def memory_text(self) -> str:
++        return self.text
++
++
++@dataclass(frozen=True)
++class ChunkLocation:
++    file: str
++    lines: str
++
++
++@dataclass(frozen=True)
++class IndexResult:
++    index_dir: Path
++    session_id: str
++    repo_root: Path
++    index_ms: float
++    memory_count: int
++    reused: bool
++    memory_map: dict[str, ChunkLocation]
++
++
++@dataclass(frozen=True)
++class RepoResult:
++    repo: str
++    language: str
++    ndcg10: float
++    p50_ms: float
++    index_ms: float
++    memories: int
++
++
++def _dcg(relevances: list[int]) -> float:
++    return sum(rel / math.log2(index + 2) for index, rel in enumerate(relevances))
++
++
++def ndcg_at_k(relevant_ranks: list[int], n_relevant: int, k: int) -> float:
++    if n_relevant == 0:
++        return 0.0
++    relevances = [0] * k
++    for rank in relevant_ranks:
++        if 1 <= rank <= k:
++            relevances[rank - 1] = 1
++    ideal = _dcg([1] * min(k, n_relevant))
++    return _dcg(relevances) / ideal if ideal > 0 else 0.0
++
++
++def file_rank(file_paths: list[str], target_path: str) -> int | None:
++    for index, file_path in enumerate(file_paths, 1):
++        if path_matches(file_path, target_path):
++            return index
++    return None
++
++
++def _session_id(repo: str) -> str:
++    return f"attemory-semble-{repo}"
++
++
++def _file_header(file_path: str) -> str:
++    return f"{FILE_HEADER_PREFIX}{file_path}"
++
++
++def _read_text(path: Path) -> str:
++    return path.read_text(encoding="utf-8", errors="replace")
++
++
++def _list_code_files(repo_root: Path) -> list[Path]:
++    files: list[Path] = []
++    for root, dirnames, filenames in os.walk(repo_root):
++        dirnames[:] = sorted(dirname for dirname in dirnames if dirname not in SKIP_DIRS)
++        root_path = Path(root)
++        for filename in sorted(filenames):
++            path = root_path / filename
++            if path.suffix.lower() in DEFAULT_CODE_SUFFIXES or path.name in SPECIAL_CODE_FILENAMES:
++                files.append(path)
++    return sorted(files, key=lambda path: path.relative_to(repo_root).as_posix())
++
++
++def _build_chunks(repo_root: Path) -> tuple[list[CodeChunk], int, int]:
++    chunks: list[CodeChunk] = []
++    total_lines = 0
++    code_files = _list_code_files(repo_root)
++    for path in code_files:
++        rel_path = path.relative_to(repo_root).as_posix()
++        lines = _read_text(path).splitlines(keepends=True)
++        if not lines:
++            continue
++        total_lines += len(lines)
++        for start, end in _collect_line_blocks(lines):
++            text = "".join(lines[start - 1 : end])
++            if text.strip():
++                chunks.append(
++                    CodeChunk(
++                        id=str(len(chunks)),
++                        file=rel_path,
++                        start_line=start,
++                        end_line=end,
++                        text=text,
++                    )
++                )
++    return chunks, len(code_files), total_lines
++
++
++def _collect_line_blocks(
++    lines: list[str],
++    *,
++    target_lines: int = TARGET_LINES_PER_BLOCK,
++    split_window: int = BLANK_LINE_SEARCH_WINDOW,
++) -> list[tuple[int, int]]:
++    total_lines = len(lines)
++    if total_lines == 0:
++        return []
++
++    blocks: list[tuple[int, int]] = []
++    start = 1
++    while start <= total_lines:
++        preferred_end = min(start + target_lines - 1, total_lines)
++        if preferred_end == total_lines:
++            blocks.append((start, total_lines))
++            break
++
++        search_start = max(start, preferred_end - split_window)
++        search_end = min(total_lines, preferred_end + split_window)
++        blank_candidates = [
++            line_no
++            for line_no in range(search_start, search_end + 1)
++            if not lines[line_no - 1].strip()
++        ]
++        if blank_candidates:
++            end = min(blank_candidates, key=lambda line_no: (abs(line_no - preferred_end), line_no))
++        else:
++            end = preferred_end
++
++        blocks.append((start, end))
++        start = end + 1
++
++    return blocks
++
++
++def _write_index_files(
++    *,
++    index_dir: Path,
++    session_id: str,
++    repo_root: Path,
++    chunks: list[CodeChunk],
++    file_count: int,
++    line_count: int,
++) -> dict[str, ChunkLocation]:
++    index_dir.mkdir(parents=True, exist_ok=True)
++    memory_map = {chunk.id: ChunkLocation(file=chunk.file, lines=chunk.lines) for chunk in chunks}
++    with (index_dir / MAP_FILE).open("w", encoding="utf-8") as handle:
++        for chunk in chunks:
++            handle.write(
++                json.dumps(
++                    {
++                        "id": chunk.id,
++                        "file": chunk.file,
++                        "lines": chunk.lines,
++                    },
++                    ensure_ascii=False,
++                )
++                + "\n"
++            )
++
++    metadata = {
++        "session_id": session_id,
++        "repo_root": str(repo_root),
++        "map_file": MAP_FILE,
++        "memory_count": len(chunks),
++        "file_count": file_count,
++        "line_count": line_count,
++        "system_prompt": SEARCH_SYSTEM_PROMPT,
++    }
++    (index_dir / INDEX_FILE).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
++    return memory_map
++
++
++def _read_index_files(index_dir: Path) -> IndexResult | None:
++    index_path = index_dir / INDEX_FILE
++    map_path = index_dir / MAP_FILE
++    if not index_path.exists() or not map_path.exists():
++        return None
++
++    try:
++        metadata = json.loads(index_path.read_text(encoding="utf-8"))
++        session_id = str(metadata["session_id"])
++        repo_root = Path(str(metadata["repo_root"]))
++        memory_count = int(metadata["memory_count"])
++        memory_map: dict[str, ChunkLocation] = {}
++        with map_path.open("r", encoding="utf-8") as handle:
++            for line in handle:
++                if not line.strip():
++                    continue
++                item = json.loads(line)
++                memory_map[str(item["id"])] = ChunkLocation(file=str(item["file"]), lines=str(item["lines"]))
++    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
++        print(f"Cannot reuse {index_dir}: invalid index files: {exc}", file=sys.stderr)
++        return None
++
++    if len(memory_map) != memory_count:
++        print(
++            f"Cannot reuse {index_dir}: map has {len(memory_map)} memories, metadata says {memory_count}.",
++            file=sys.stderr,
++        )
++        return None
++
++    return IndexResult(
++        index_dir=index_dir,
++        session_id=session_id,
++        repo_root=repo_root,
++        index_ms=0.0,
++        memory_count=memory_count,
++        reused=True,
++        memory_map=memory_map,
++    )
++
++
++def _delete_session(client: Any, session_id: str) -> None:
++    try:
++        client.delete_session(session_id=session_id)
++    except OSError:
++        raise SystemExit(f"Could not connect to attemory at {client.host}:{client.port}; start the server first.")
++    except Exception:
++        pass
++
++
++def _fresh_index(
++    *,
++    repo: str,
++    benchmark_dir: Path,
++    index_root: Path,
++    client: Any,
++) -> IndexResult:
++    session_id = _session_id(repo)
++    index_dir = index_root / repo
++    _delete_session(client, session_id)
++
++    started = time.perf_counter()
++    chunks, file_count, line_count = _build_chunks(benchmark_dir)
++    session_client = client.with_session(session_id)
++    session_client.create_session()
++    output = session_client.add_system(SEARCH_SYSTEM_PROMPT)
++    remaining_tokens = output.remaining_tokens
++    current_file: str | None = None
++    for chunk in chunks:
++        if chunk.file != current_file:
++            if remaining_tokens < FILE_MIN_REMAINING_TOKENS:
++                session_client.next_segment()
++            output = session_client.add_memory(_file_header(chunk.file))
++            remaining_tokens = output.remaining_tokens
++            current_file = chunk.file
++        output = session_client.add_memory(chunk.memory_text, id=chunk.id)
++        remaining_tokens = output.remaining_tokens
++    session_client.index_session()
++    session_client.save_session()
++    memory_map = _write_index_files(
++        index_dir=index_dir,
++        session_id=session_id,
++        repo_root=benchmark_dir,
++        chunks=chunks,
++        file_count=file_count,
++        line_count=line_count,
++    )
++    index_ms = (time.perf_counter() - started) * 1000
++    return IndexResult(
++        index_dir=index_dir,
++        session_id=session_id,
++        repo_root=benchmark_dir,
++        index_ms=index_ms,
++        memory_count=len(chunks),
++        reused=False,
++        memory_map=memory_map,
++    )
++
++
++def _build_or_restore_index(
++    *,
++    repo: str,
++    benchmark_dir: Path,
++    index_root: Path,
++    client: Any,
++    reuse_index: bool,
++) -> IndexResult:
++    if reuse_index:
++        cached = _read_index_files(index_root / repo)
++        if cached is not None:
++            return cached
++        print(f"Reindexing {repo}: reusable index artifacts were not found.", file=sys.stderr)
++    return _fresh_index(
++        repo=repo,
++        benchmark_dir=benchmark_dir,
++        index_root=index_root,
++        client=client,
++    )
++
++
++def _search_repo(
++    query: str,
++    *,
++    index: IndexResult,
++    client: Any,
++    search_topk: int,
++    top_k: int,
++    file_aggregation: str,
++    oneshot_rerank: bool,
++) -> list[str]:
++    session_client = client.with_session(index.session_id)
++
++    formatted_query = "Query: " + query
++    query_context = QUERY_CONTEXT_PROMPT.format(question=query)
++
++    # First search the persisted Attemory session. File headers may be returned,
++    # but only chunk memories have ids, so only ids found in memory_map are used
++    # for scoring.
++    candidates = session_client.search(formatted_query, query_context=query_context, top_k = search_topk)
++    ordered_ids = [result.id for result in candidates if isinstance(result.id, str) and result.id in index.memory_map]
++
++    candidate_segments = {
++        result.segment_id
++        for result in candidates
++        if getattr(result, "segment_id", None) is not None
++    }
++
++    # When results come from multiple segments, rebuild the same file-header +
++    # chunk layout from just the returned chunks and ask oneshot_search to rank
++    # them globally. This keeps the query-time template easy to inspect:
++    #
++    #   // the following code come from path/to/file
++    #   returned chunk
++    #   returned chunk
++    #
++    # Files with no returned chunk are omitted. Header memories intentionally
++    # have no id and are filtered out before scoring.
++    if oneshot_rerank and len(candidate_segments) > 1:
++        current = candidates
++        for _ in range(8):
++            text_by_id: dict[str, str] = {}
++            for result in current:
++                if not isinstance(result.id, str) or result.id not in index.memory_map:
++                    continue
++                if result.id not in text_by_id and isinstance(result.text, str) and result.text:
++                    text_by_id[result.id] = result.text
++
++            memories: list[dict[str, str]] = []
++            current_file: str | None = None
++            for chunk_id, location in index.memory_map.items():
++                text = text_by_id.get(chunk_id)
++                if text is None:
++                    continue
++                if location.file != current_file:
++                    memories.append({"text": _file_header(location.file)})
++                    current_file = location.file
++                memories.append({"id": chunk_id, "text": text})
++
++            if not memories:
++                break
++
++            non_id_count = sum(1 for memory in memories if "id" not in memory)
++            oneshot_top_k = min(len(memories), non_id_count + search_topk)
++            try:
++                reranked = session_client.oneshot_search(
++                    formatted_query,
++                    memories,
++                    system=RERANK_SYSTEM_PROMPT,
++                    query_context=query_context,
++                    top_k=oneshot_top_k,
++                )
++            except Exception as exc:
++                print(f"attemory oneshot rerank failed; using session search order: {exc}", file=sys.stderr)
++                break
++
++            reranked_ids = [
++                result.id
++                for result in reranked
++                if isinstance(result.id, str) and result.id in index.memory_map
++            ]
++            if reranked_ids:
++                seen = set(reranked_ids)
++                ordered_ids = reranked_ids + [candidate_id for candidate_id in ordered_ids if candidate_id not in seen]
++
++            reranked_segments = {
++                result.segment_id
++                for result in reranked
++                if getattr(result, "segment_id", None) is not None
++            }
++            if len(reranked_segments) <= 1:
++                break
++            current = reranked
++
++    # Convert chunk-level ranking to file-level ranking. Multiple chunks from
++    # the same file add evidence with reciprocal-rank weights; this matches the
++    # Semble metric, which is evaluated at file level.
++    hits: list[dict[str, str]] = []
++    for candidate_id in ordered_ids:
++        location = index.memory_map.get(candidate_id)
++        if location is None:
++            continue
++        hits.append(
++            {
++                "id": candidate_id,
++                "relative_file": location.file,
++                "file": f"{str(index.repo_root).rstrip('/')}/{location.file}".replace("//", "/"),
++                "lines": location.lines,
++            }
++        )
++        if len(hits) >= search_topk:
++            break
++
++    file_scores: dict[str, float] = {}
++    first_rank: dict[str, int] = {}
++    hit_counts: dict[str, int] = {}
++    for rank, hit in enumerate(hits, start=1):
++        file_path = hit["file"]
++        hit_count = hit_counts.get(file_path, 0)
++        if file_aggregation == "first" and hit_count > 0:
++            continue
++        if file_aggregation == "capped" and hit_count >= FILE_AGGREGATION_MAX_HITS:
++            continue
++
++        weight = FILE_AGGREGATION_EXTRA_WEIGHT if file_aggregation == "capped" and hit_count > 0 else 1.0
++        file_scores[file_path] = file_scores.get(file_path, 0.0) + weight / math.log2(rank + 1)
++        hit_counts[file_path] = hit_count + 1
++        first_rank.setdefault(file_path, rank)
++
++    return sorted(file_scores, key=lambda path: (-file_scores[path], first_rank[path], path))[:top_k]
++
++
++def _clear_cache(client: Any, session_id: str) -> None:
++    try:
++        client.clear_cache(session_id=session_id)
++    except Exception:
++        pass
++
++
++def _evaluate_repo(
++    tasks: list[Task],
++    *,
++    index: IndexResult,
++    client: Any,
++    top_k: int,
++    search_topk: int,
++    latency_runs: int,
++    file_aggregation: str,
++    oneshot_rerank: bool,
++    verbose: bool = False,
++) -> tuple[float, float]:
++    try:
++        client.restore_session(session_id=index.session_id)
++    except Exception as exc:
++        raise RuntimeError(f"failed to restore attemory session {index.session_id!r}") from exc
++
++    ndcg10_sum = 0.0
++    latencies: list[float] = []
++    for task in tasks:
++        query_latencies: list[float] = []
++        file_paths: list[str] = []
++        for _ in range(latency_runs):
++            started = time.perf_counter()
++            file_paths = _search_repo(
++                task.query,
++                index=index,
++                client=client,
++                search_topk=search_topk,
++                top_k=top_k,
++                file_aggregation=file_aggregation,
++                oneshot_rerank=oneshot_rerank,
++            )
++            query_latencies.append((time.perf_counter() - started) * 1000)
++            _clear_cache(client, index.session_id)
++
++        latencies.append(sorted(query_latencies)[len(query_latencies) // 2])
++        relevant_ranks = [rank for target in task.all_relevant if (rank := file_rank(file_paths, target.path))]
++        q_ndcg10 = ndcg_at_k(relevant_ranks, len(task.all_relevant), top_k)
++        ndcg10_sum += q_ndcg10
++
++        if verbose:
++            print(
++                f"  ndcg@10={q_ndcg10:.3f}  ranks={relevant_ranks}  n_rel={len(task.all_relevant)}  q={task.query!r}",
++                file=sys.stderr,
++            )
++            print(f"    targets: {', '.join(target.path for target in task.all_relevant)}", file=sys.stderr)
++            print(f"    top-5:   {file_paths[:5]}", file=sys.stderr)
++
++    latencies.sort()
++    return ndcg10_sum / len(tasks), latencies[len(latencies) // 2]
++
++
++def _coerce_int(value: object) -> int:
++    if not isinstance(value, int | str):
++        raise TypeError(f"expected int-compatible value, got {type(value).__name__}")
++    return int(value)
++
++
++def _parse_target(raw: str | dict[str, object]) -> Target:
++    if isinstance(raw, str):
++        return Target(path=raw)
++    if not isinstance(raw, dict):
++        raise TypeError(f"expected mapping, got {type(raw).__name__}")
++    start_line = raw.get("start_line")
++    end_line = raw.get("end_line")
++    return Target(
++        path=str(raw["path"]),
++        start_line=_coerce_int(start_line) if start_line is not None else None,
++        end_line=_coerce_int(end_line) if end_line is not None else None,
++    )
++
++
++def _load_filtered_tasks_with_annotations(
++    repos: list[str] | None,
++    languages: list[str] | None,
++    annotations_dir: Path,
++) -> tuple[dict[str, RepoSpec], list[Task]]:
++    if annotations_dir == ANNOTATIONS_DIR:
++        return load_filtered_tasks(repos, languages)
++
++    specs = {
++        name: spec
++        for name, spec in load_repo_specs().items()
++        if spec.checkout_dir.exists() and (annotations_dir / f"{name}.json").exists()
++    }
++    tasks: list[Task] = []
++    for annotation_file in sorted(annotations_dir.glob("*.json")):
++        if annotation_file.stem not in specs:
++            continue
++        raw = json.loads(annotation_file.read_text(encoding="utf-8"))
++        for item in raw:
++            repo = item.get("repo", annotation_file.stem)
++            if repo not in specs:
++                continue
++            spec = specs[repo]
++            category = item.get("category")
++            tasks.append(
++                Task(
++                    repo=repo,
++                    language=spec.language,
++                    query=item["query"],
++                    relevant=tuple(_parse_target(target) for target in item.get("relevant", [])),
++                    secondary=tuple(_parse_target(target) for target in item.get("secondary", [])),
++                    category=category if isinstance(category, str) else infer_category(item["query"]),
++                )
++            )
++
++    filtered = apply_task_filters(tasks, repos=repos, languages=languages)
++    if not filtered:
++        raise SystemExit("No benchmark tasks matched the requested filters.")
++    return specs, filtered
++
++
++def _build_summary(results: list[RepoResult]) -> dict[str, object]:
++    avg_ndcg10 = sum(result.ndcg10 for result in results) / len(results)
++    avg_p50 = sum(result.p50_ms for result in results) / len(results)
++    avg_index = sum(result.index_ms for result in results) / len(results)
++    return {
++        "tool": "attemory",
++        "repos": [asdict(result) for result in results],
++        "avg_ndcg10": round(avg_ndcg10, 4),
++        "avg_p50_ms": round(avg_p50, 1),
++        "avg_index_ms": round(avg_index, 0),
++    }
++
++
++def _load_completed(out_path: Path | None) -> dict[str, RepoResult]:
++    if out_path is None or not out_path.exists():
++        return {}
++    try:
++        data = json.loads(out_path.read_text(encoding="utf-8"))
++        return {
++            entry["repo"]: RepoResult(
++                repo=entry["repo"],
++                language=entry["language"],
++                ndcg10=float(entry["ndcg10"]),
++                p50_ms=float(entry["p50_ms"]),
++                index_ms=float(entry.get("index_ms", 0.0)),
++                memories=int(entry.get("memories", 0)),
++            )
++            for entry in data.get("repos", [])
++        }
++    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
++        return {}
++
++
++def _parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Benchmark attemory on the semble benchmark suite.")
++    add_filter_args(parser, verbose=True)
++    parser.add_argument("--host", default=os.environ.get("ATTEMORY_HOST", "127.0.0.1"), help="attemory host.")
++    parser.add_argument("--port", type=int, default=int(os.environ.get("ATTEMORY_PORT", "9006")), help="attemory port.")
++    parser.add_argument(
++        "--timeout",
++        type=float,
++        default=float(os.environ.get("ATTEMORY_TIMEOUT", "3600")),
++        help="HTTP timeout in seconds.",
++    )
++    parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K, help="Number of files used for NDCG@K.")
++    parser.add_argument(
++        "--search-topk",
++        type=int,
++        default=DEFAULT_SEARCH_TOPK,
++        help="Number of chunk hits kept before file-level fusion.",
++    )
++    parser.add_argument("--latency-runs", type=int, default=DEFAULT_LATENCY_RUNS)
++    parser.add_argument("--index-root", type=Path, default=DEFAULT_INDEX_ROOT)
++    parser.add_argument("--annotations-dir", type=Path, default=ANNOTATIONS_DIR)
++    parser.add_argument(
++        "--file-aggregation",
++        choices=["sum", "capped", "first"],
++        default=FILE_AGGREGATION_MODE,
++        help="How multiple chunk hits from one file are fused into a file ranking.",
++    )
++    parser.add_argument(
++        "--no-oneshot-rerank",
++        dest="oneshot_rerank",
++        action="store_false",
++        default=True,
++        help="Disable one-shot reranking when search results come from multiple segments.",
++    )
++    parser.add_argument(
++        "--output",
++        metavar="FILE",
++        help="JSON file to write results to; existing per-repo entries are used for resume.",
++    )
++    index_group = parser.add_mutually_exclusive_group()
++    index_group.add_argument(
++        "--reuse-index",
++        dest="reuse_index",
++        action="store_true",
++        default=True,
++        help="Reuse existing sidecar files and restore the saved attemory session. This is the default.",
++    )
++    index_group.add_argument(
++        "--rebuild-index",
++        dest="reuse_index",
++        action="store_false",
++        help="Delete and rebuild each selected attemory session.",
++    )
++    return parser.parse_args()
++
++
++def main() -> None:
++    args = _parse_args()
++    args.index_root = args.index_root.expanduser()
++    args.annotations_dir = args.annotations_dir.expanduser()
++
++    is_full_run = not args.repo and not args.language
++    out_path = Path(args.output).expanduser() if args.output else (results_path("attemory") if is_full_run else None)
++    completed = _load_completed(out_path)
++    repo_specs, tasks = _load_filtered_tasks_with_annotations(args.repo or None, args.language or None, args.annotations_dir)
++    repo_tasks = grouped_tasks(tasks)
++    client = AttemoryClient(host=args.host, port=args.port, timeout=args.timeout)
++
++    results: list[RepoResult] = list(completed.values())
++    if completed:
++        print(f"Resuming: {len(completed)} repo(s) already done, skipping.", file=sys.stderr)
++
++    print(f"{'Repo':<22} {'Language':<12} {'Memories':>8} {'Index':>9} {'NDCG@10':>8} {'p50':>8}", file=sys.stderr)
++    print(f"{'-' * 22} {'-' * 12} {'-' * 8} {'-' * 9} {'-' * 8} {'-' * 8}", file=sys.stderr)
++    for result in sorted(results, key=lambda item: item.repo):
++        print(
++            f"{result.repo:<22} {result.language:<12} {result.memories:>8} "
++            f"{result.index_ms:>8.0f}ms {result.ndcg10:>8.3f} {result.p50_ms:>7.1f}ms (cached)",
++            file=sys.stderr,
++        )
++
++    for repo, repo_task_list in sorted(repo_tasks.items()):
++        if repo in completed:
++            continue
++        spec = repo_specs[repo]
++        if args.verbose:
++            print(f"\n--- {repo} ---", file=sys.stderr)
++        index = _build_or_restore_index(
++            repo=repo,
++            benchmark_dir=spec.benchmark_dir,
++            index_root=args.index_root,
++            client=client,
++            reuse_index=args.reuse_index,
++        )
++        try:
++            ndcg10, p50_ms = _evaluate_repo(
++                repo_task_list,
++                index=index,
++                client=client,
++                top_k=args.top_k,
++                search_topk=args.search_topk,
++                latency_runs=args.latency_runs,
++                file_aggregation=args.file_aggregation,
++                oneshot_rerank=args.oneshot_rerank,
++                verbose=args.verbose,
++            )
++        except Exception:
++            if not (args.reuse_index and index.reused):
++                raise
++            print(f"Reuse failed for {repo}; reindexing and retrying once.", file=sys.stderr)
++            index = _fresh_index(
++                repo=repo,
++                benchmark_dir=spec.benchmark_dir,
++                index_root=args.index_root,
++                client=client,
++            )
++            ndcg10, p50_ms = _evaluate_repo(
++                repo_task_list,
++                index=index,
++                client=client,
++                top_k=args.top_k,
++                search_topk=args.search_topk,
++                latency_runs=args.latency_runs,
++                file_aggregation=args.file_aggregation,
++                oneshot_rerank=args.oneshot_rerank,
++                verbose=args.verbose,
++            )
++
++        result = RepoResult(
++            repo=repo,
++            language=spec.language,
++            ndcg10=ndcg10,
++            p50_ms=p50_ms,
++            index_ms=index.index_ms,
++            memories=index.memory_count,
++        )
++        results.append(result)
++        print(
++            f"{repo:<22} {spec.language:<12} {index.memory_count:>8} "
++            f"{index.index_ms:>8.0f}ms {ndcg10:>8.3f} {p50_ms:>7.1f}ms",
++            file=sys.stderr,
++        )
++        if out_path:
++            out_path.parent.mkdir(parents=True, exist_ok=True)
++            out_path.write_text(json.dumps(_build_summary(results), indent=2) + "\n", encoding="utf-8")
++
++    if not results:
++        return
++
++    avg_ndcg10 = sum(result.ndcg10 for result in results) / len(results)
++    avg_p50 = sum(result.p50_ms for result in results) / len(results)
++    avg_index = sum(result.index_ms for result in results) / len(results)
++    print(f"{'-' * 22} {'-' * 12} {'-' * 8} {'-' * 9} {'-' * 8} {'-' * 8}", file=sys.stderr)
++    print(
++        f"{'Average (' + str(len(results)) + ')':<22} {'':<12} {'':>8} "
++        f"{avg_index:>8.0f}ms {avg_ndcg10:>8.3f} {avg_p50:>7.1f}ms",
++        file=sys.stderr,
++    )
++
++    summary = _build_summary(results)
++    print(json.dumps(summary, indent=2))
++    if out_path:
++        print(f"\nResults saved to {out_path}", file=sys.stderr)
++
++
++if __name__ == "__main__":
++    main()

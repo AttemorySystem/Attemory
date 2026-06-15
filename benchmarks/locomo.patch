@@ -1,0 +1,656 @@
+diff --git a/methods/EverCore/evaluation/config/prompts.yaml b/methods/EverCore/evaluation/config/prompts.yaml
+index 042ec04..990571b 100644
+--- a/methods/EverCore/evaluation/config/prompts.yaml
++++ b/methods/EverCore/evaluation/config/prompts.yaml
+@@ -176,6 +176,79 @@ online_api:
+ 
+       Now, follow the Chain-of-Thought process above to answer the question:
+ 
++    answer_prompt_attemory: |
++      You are an intelligent memory assistant tasked with retrieving accurate information from episodic memories.
++
++      # CONTEXT:
++      You have access to selected conversations between two speakers that may contain evidence needed to answer the question.
++      Each selected conversation has a timestamp header, and its dialogue turns keep their original order.
++
++      # INSTRUCTIONS:
++      Your goal is to synthesize information from all relevant memories to provide a comprehensive and accurate answer.
++      You MUST follow a structured Chain-of-Thought process to ensure no details are missed.
++      Actively look for connections between people, places, and events to build a complete picture. Synthesize information from different memories to answer the user's question.
++      It is CRITICAL that you move beyond simple fact extraction and perform logical inference. When the evidence strongly suggests a connection, you must state that connection. Do not dismiss reasonable inferences as "speculation." Your task is to provide the most complete answer supported by the available evidence.
++
++      # CRITICAL REQUIREMENTS:
++      1. NEVER omit specific names - use "Amy's colleague Rob" not "a colleague"
++      2. ALWAYS include exact numbers, amounts, prices, percentages, dates, times
++      3. PRESERVE frequencies exactly - "every Tuesday and Thursday" not "twice a week"
++      4. MAINTAIN all proper nouns and entities as they appear
++
++      # RESPONSE FORMAT (You MUST follow this structure):
++
++      ## STEP 1: RELEVANT MEMORIES EXTRACTION
++      [List each selected conversation and dialogue turn that relates to the question, using the conversation timestamp header]
++      - Conversation 1: [timestamp header] - [relevant dialogue turns]
++      - Conversation 2: [timestamp header] - [relevant dialogue turns]
++      ...
++
++      ## STEP 2: KEY INFORMATION IDENTIFICATION
++      [Extract ALL specific details from the memories]
++      - Names mentioned: [list all person names, place names, company names]
++      - Numbers/Quantities: [list all amounts, prices, percentages]
++      - Dates/Times: [list all temporal information]
++      - Frequencies: [list any recurring patterns]
++      - Other entities: [list brands, products, etc.]
++
++      ## STEP 3: CROSS-MEMORY LINKING
++      [Identify entities that appear in multiple memories and link related information. Make reasonable inferences when entities are strongly connected.]
++      - Shared entities: [list people, places, events mentioned across different memories]
++      - Connections found: [e.g., "Memory 1 mentions A moved from hometown -> Memory 2 mentions A's hometown is LA -> Therefore A moved from LA"]
++      - Inferred facts: [list any facts that require combining information from multiple memories]
++
++      ## STEP 4: TIME REFERENCE CALCULATION
++      [If applicable, convert relative time references]
++      - Original reference: [e.g., "last year" from May 2022]
++      - Calculated actual time: [e.g., "2021"]
++
++      ## STEP 5: CONTRADICTION CHECK
++      [If multiple memories contain different information]
++      - Conflicting information: [describe]
++      - Resolution: [explain which is most recent/reliable]
++
++      ## STEP 6: DETAIL VERIFICATION CHECKLIST
++      - [ ] All person names included: [list them]
++      - [ ] All locations included: [list them]
++      - [ ] All numbers exact: [list them]
++      - [ ] All frequencies specific: [list them]
++      - [ ] All dates/times precise: [list them]
++      - [ ] All proper nouns preserved: [list them]
++
++      ## STEP 7: ANSWER FORMULATION
++      [Explain how you're combining the information to answer the question]
++
++      ## FINAL ANSWER:
++      [Provide the concise answer with ALL specific details preserved]
++
++      ---
++
++      {context}
++
++      Question: {question}
++
++      Now, follow the Chain-of-Thought process above to answer the question:
++
+     answer_prompt_zep: |
+       You are a helpful expert assistant answering questions based on the provided context.
+ 
+@@ -287,4 +360,3 @@ add_stage:
+   # memu:
+   #   extraction_prompt: |
+   #     ...
+-
+diff --git a/methods/EverCore/evaluation/config/systems/attemory.yaml b/methods/EverCore/evaluation/config/systems/attemory.yaml
+new file mode 100644
+index 0000000..0c60fc5
+--- /dev/null
++++ b/methods/EverCore/evaluation/config/systems/attemory.yaml
+@@ -0,0 +1,34 @@
++# Attemory System Configuration
++
++name: "attemory"
++version: "1.0"
++description: "Attemory memory system"
++
++adapter: "attemory"
++
++# Attemory server is started externally. The adapter only connects to it.
++host: "${ATTEMORY_HOST:127.0.0.1}"
++port: "${ATTEMORY_PORT:9006}"
++timeout: 3600
++
++# Reset sessions during Add to avoid polluted evaluation state.
++reset_sessions: true
++session_prefix: "${ATTEMORY_SESSION_PREFIX:eval}"
++
++# Attemory session operations should be serialized against one server.
++num_workers: 1
++
++search:
++  top_k: 50
++  num_workers: 1
++
++answer:
++  max_retries: 3
++
++llm:
++  provider: "openai"
++  model: "openai/gpt-4.1-mini"
++  api_key: "${LLM_API_KEY}"
++  base_url: "${LLM_BASE_URL:https://openrouter.ai/api/v1}"
++  temperature: 0
++  max_tokens: 32768
+diff --git a/methods/EverCore/evaluation/src/adapters/attemory_adapter.py b/methods/EverCore/evaluation/src/adapters/attemory_adapter.py
+new file mode 100644
+index 0000000..0573c7c
+--- /dev/null
++++ b/methods/EverCore/evaluation/src/adapters/attemory_adapter.py
+@@ -0,0 +1,496 @@
++"""
++Attemory adapter for the EverCore evaluation framework.
++
++The adapter expects an attemory server to be running already. It uses the
++current attemory Python HTTP client API.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import os
++import sys
++from pathlib import Path
++from typing import Any, Dict, List
++
++from rich.console import Console
++from rich.progress import (
++    BarColumn,
++    MofNCompleteColumn,
++    Progress,
++    SpinnerColumn,
++    TextColumn,
++    TimeElapsedColumn,
++    TimeRemainingColumn,
++)
++
++from evaluation.src.adapters.online_base import OnlineAPIAdapter
++from evaluation.src.adapters.registry import register_adapter
++from evaluation.src.core.data_models import Conversation, Message, SearchResult
++
++try:
++    from attemory import AttemoryClient, AttemoryHTTPError, MemoryInput
++    from attemory.models import SearchResult as AttemorySearchResult
++except ModuleNotFoundError:
++    repo_python = Path(__file__).resolve().parents[7] / "python"
++    if repo_python.exists():
++        sys.path.insert(0, str(repo_python))
++    from attemory import AttemoryClient, AttemoryHTTPError, MemoryInput
++    from attemory.models import SearchResult as AttemorySearchResult
++
++
++ATTEMORY_SYSTEM_PROMPT = (
++    "Read the following conversation and answer the query at the end."
++)
++
++
++@register_adapter("attemory")
++class AttemoryAdapter(OnlineAPIAdapter):
++    """Attemory session-based adapter."""
++
++    def __init__(self, config: dict, output_dir: Path = None):
++        super().__init__(config, output_dir)
++        self.host = str(config.get("host", "127.0.0.1"))
++        self.port = int(config.get("port", 9006))
++        self.timeout = float(config.get("timeout", 3600))
++        self.reset_sessions = bool(config.get("reset_sessions", True))
++        self.session_prefix = str(config.get("session_prefix", "eval"))
++        context_dump_dir = config.get("context_dump_dir") or os.environ.get(
++            "ATTEMORY_CONTEXT_DUMP_DIR"
++        )
++        self.context_dump_dir = Path(context_dump_dir) if context_dump_dir else None
++        self._context_dump_counter = 0
++
++        self.client = AttemoryClient(
++            host=self.host,
++            port=self.port,
++            session_id=None,
++            timeout=self.timeout,
++        )
++        self._semaphore = asyncio.Semaphore(1)
++        self._conversations: List[Conversation] = []
++        self.console = Console()
++
++        print(f"   Attemory server: {self.host}:{self.port}")
++        print(f"   Timeout: {self.timeout}s")
++        print(f"   Reset sessions: {self.reset_sessions}")
++        print(f"   Session prefix: {self.session_prefix}")
++        print("   Search: /search")
++        if self.context_dump_dir:
++            print(f"   Context dump dir: {self.context_dump_dir}")
++
++    def _make_session_id(self, conversation_id: str, speaker: str = "speaker_a") -> str:
++        return f"{self.session_prefix}_{conversation_id}"
++
++    def _need_dual_perspective(self, speaker_a: str, speaker_b: str) -> bool:
++        return False
++
++    def _message_memory_id(self, conv: Conversation, message_idx: int) -> str:
++        message = conv.messages[message_idx]
++        raw_id = (
++            message.metadata.get("message_id")
++            or message.metadata.get("dia_id")
++            or f"{conv.conversation_id}:{message_idx}"
++        )
++        return str(raw_id)
++
++    async def add(self, conversations: List[Conversation], **kwargs) -> Dict[str, Any]:
++        self._conversations = conversations
++        await self._create_sessions(conversations)
++        return await super().add(conversations, **kwargs)
++
++    async def _create_sessions(self, conversations: List[Conversation]) -> None:
++        self.console.print(f"\n{'=' * 60}", style="bold cyan")
++        self.console.print("Attemory: Creating sessions", style="bold cyan")
++        self.console.print(f"{'=' * 60}", style="bold cyan")
++
++        with Progress(
++            SpinnerColumn(),
++            TextColumn("[progress.description]{task.description}"),
++            BarColumn(),
++            MofNCompleteColumn(),
++            TextColumn("-"),
++            TimeElapsedColumn(),
++            TextColumn("-"),
++            TimeRemainingColumn(),
++            console=self.console,
++            transient=False,
++        ) as progress:
++            task = progress.add_task(
++                "[cyan]Creating sessions...", total=len(conversations)
++            )
++
++            for conv in conversations:
++                session_id = self._make_session_id(conv.conversation_id)
++                async with self._semaphore:
++                    await asyncio.to_thread(self._reset_or_create_session, session_id)
++                    await asyncio.to_thread(
++                        self.client.add_system,
++                        ATTEMORY_SYSTEM_PROMPT,
++                        session_id,
++                    )
++                progress.advance(task)
++
++        self.console.print(
++            f"[green]Created {len(conversations)} Attemory sessions[/green]"
++        )
++
++    def _reset_or_create_session(self, session_id: str) -> None:
++        if self.reset_sessions:
++            try:
++                self.client.delete_session(session_id=session_id)
++            except AttemoryHTTPError as exc:
++                if exc.status_code != 404:
++                    raise
++
++        try:
++            self.client.create_session(session_id=session_id)
++        except AttemoryHTTPError as exc:
++            if exc.status_code != 409:
++                raise
++
++    async def _add_user_messages(
++        self,
++        conv: Conversation,
++        messages: List[Dict[str, Any]],
++        speaker: str,
++        **kwargs,
++    ) -> Any:
++        session_id = self._make_session_id(conv.conversation_id)
++        progress = kwargs.get("progress")
++        task_id = kwargs.get("task_id")
++        current_session = object()
++
++        for idx, msg_dict in enumerate(messages):
++            original_msg = conv.messages[idx]
++            message_session = original_msg.metadata.get("session")
++            memory_text = self._format_message_memory(original_msg, msg_dict["content"])
++
++            async with self._semaphore:
++                if message_session != current_session:
++                    current_session = message_session
++                    await asyncio.to_thread(
++                        self.client.add_memory,
++                        MemoryInput(text=self._format_session_header(original_msg)),
++                        session_id,
++                    )
++
++                await asyncio.to_thread(
++                    self.client.add_memory,
++                    MemoryInput(id=self._message_memory_id(conv, idx), text=memory_text),
++                    session_id,
++                )
++
++            if progress is not None and task_id is not None:
++                progress.update(task_id, advance=1)
++
++        return None
++
++    async def _post_add_process(self, add_results: List[Any], **kwargs) -> None:
++        conversations = kwargs.get("conversations", self._conversations)
++        if not conversations:
++            self.console.print("[yellow]Attemory: no conversations to index[/yellow]")
++            return
++
++        self.console.print(f"\n{'=' * 60}", style="bold yellow")
++        self.console.print("Attemory: Indexing sessions", style="bold yellow")
++        self.console.print(f"{'=' * 60}", style="bold yellow")
++
++        with Progress(
++            SpinnerColumn(),
++            TextColumn("[progress.description]{task.description}"),
++            BarColumn(),
++            MofNCompleteColumn(),
++            TextColumn("-"),
++            TimeElapsedColumn(),
++            TextColumn("-"),
++            TimeRemainingColumn(),
++            console=self.console,
++            transient=False,
++        ) as progress:
++            task = progress.add_task(
++                "[yellow]Indexing sessions...", total=len(conversations)
++            )
++            for conv in conversations:
++                session_id = self._make_session_id(conv.conversation_id)
++                async with self._semaphore:
++                    await asyncio.to_thread(self.client.index_session, session_id)
++                    await asyncio.to_thread(self.client.save_session, session_id)
++                progress.advance(task)
++
++        self.console.print(
++            f"[green]Indexed and saved {len(conversations)} Attemory sessions[/green]"
++        )
++
++    async def _search_single_user(
++        self,
++        query: str,
++        conversation_id: str,
++        user_id: str,
++        top_k: int,
++        **kwargs,
++    ) -> List[Dict[str, Any]]:
++        session_id = self._make_session_id(conversation_id)
++        conversation = kwargs.get("conversation")
++        formatted_query = query
++        self._dump_context_if_enabled(
++            conversation_id=conversation_id,
++            query=query,
++            formatted_query=formatted_query,
++            conversation=conversation,
++        )
++
++        async with self._semaphore:
++            # Session headers have no id and may occupy returned slots, so fetch
++            # extra candidates and keep the configured top_k for final context.
++            search_top_k = top_k * 2
++            results = await asyncio.to_thread(
++                self.client.search,
++                formatted_query,
++                session_id=session_id,
++                top_k=search_top_k,
++            )
++
++        return self._format_results(results, user_id=user_id)[:top_k]
++
++    def _format_results(
++        self,
++        results: List[AttemorySearchResult],
++        user_id: str,
++    ) -> List[Dict[str, Any]]:
++        formatted = []
++        for idx, result in enumerate(results):
++            if result.id is None:
++                continue
++            rank = result.rank if result.rank is not None else idx
++            formatted.append(
++                {
++                    "content": result.text,
++                    "score": 1.0 / (rank + 1),
++                    "user_id": user_id,
++                    "metadata": {
++                        "id": result.id,
++                        "rank": result.rank,
++                        "segment_id": result.segment_id,
++                        "memory_idx": result.memory_idx,
++                    },
++                }
++            )
++        return formatted
++
++    def _build_single_search_result(
++        self,
++        query: str,
++        conversation_id: str,
++        results: List[Dict[str, Any]],
++        user_id: str,
++        top_k: int,
++        **kwargs,
++    ) -> SearchResult:
++        conversation = kwargs.get("conversation")
++        formatted_context = self._build_selected_conversation_context(
++            conversation=conversation,
++            results=results,
++            top_k=top_k,
++        )
++        return SearchResult(
++            query=query,
++            conversation_id=conversation_id,
++            results=results,
++            retrieval_metadata={
++                "system": "attemory",
++                "top_k": top_k,
++                "search_top_k": top_k * 2,
++                "dual_perspective": False,
++                "formatted_context": formatted_context,
++            },
++        )
++
++    def _build_dual_search_result(
++        self,
++        query: str,
++        conversation_id: str,
++        all_results: List[Dict[str, Any]],
++        results_a: List[Dict[str, Any]],
++        results_b: List[Dict[str, Any]],
++        speaker_a: str,
++        speaker_b: str,
++        speaker_a_user_id: str,
++        speaker_b_user_id: str,
++        top_k: int,
++        **kwargs,
++    ) -> SearchResult:
++        return self._build_single_search_result(
++            query=query,
++            conversation_id=conversation_id,
++            results=all_results,
++            user_id="",
++            top_k=top_k,
++            **kwargs,
++        )
++
++    def _get_answer_prompt(self) -> str:
++        return self._prompts["online_api"]["default"]["answer_prompt_attemory"]
++
++    def get_system_info(self) -> Dict[str, Any]:
++        return {
++            "name": "Attemory",
++            "type": "attemory_http",
++            "description": "Attemory memory system via Python HTTP client",
++        }
++
++    def build_context_dump(
++        self,
++        *,
++        conversation: Conversation | None,
++        query: str,
++        formatted_query: str | None = None,
++    ) -> str:
++        """Return the exact logical input built for Attemory indexing and search."""
++        if formatted_query is None:
++            formatted_query = query
++
++        parts = [
++            "===== SYSTEM PROMPT =====",
++            ATTEMORY_SYSTEM_PROMPT.rstrip(),
++            "",
++            "===== CONTEXT =====",
++        ]
++
++        if conversation is not None:
++            messages = self._conversation_to_messages(
++                conversation,
++                format_type=self._get_format_type(),
++                perspective=None,
++            )
++            current_session = object()
++            for message, msg_dict in zip(conversation.messages, messages):
++                message_session = message.metadata.get("session")
++                if message_session != current_session:
++                    current_session = message_session
++                    parts.append(self._format_session_header(message))
++                parts.append(
++                    self._format_message_memory(message, msg_dict["content"])
++                )
++
++        parts.extend(
++            [
++                "",
++                "===== QUERY =====",
++                formatted_query,
++                "",
++            ]
++        )
++        return "\n".join(parts)
++
++    def _build_selected_conversation_context(
++        self,
++        *,
++        conversation: Conversation | None,
++        results: List[Dict[str, Any]],
++        top_k: int,
++    ) -> str:
++        if conversation is None:
++            return "\n\n".join(r["content"] for r in results[:top_k])
++
++        selected_ids = {
++            str(result.get("metadata", {}).get("id"))
++            for result in results[:top_k]
++            if result.get("metadata", {}).get("id") is not None
++        }
++        if not selected_ids:
++            return ""
++
++        messages = self._conversation_to_messages(
++            conversation,
++            format_type=self._get_format_type(),
++            perspective=None,
++        )
++        blocks: List[str] = []
++        current_block: List[str] = []
++        current_session = object()
++        current_session_header = ""
++        session_has_selected_message = False
++
++        for idx, (message, msg_dict) in enumerate(zip(conversation.messages, messages)):
++            message_id = self._message_memory_id(conversation, idx)
++            message_session = message.metadata.get("session")
++            if message_session != current_session:
++                current_session = message_session
++                current_session_header = self._format_selected_session_header(message)
++                session_has_selected_message = False
++
++            if message_id not in selected_ids:
++                continue
++
++            if not session_has_selected_message:
++                if current_block:
++                    blocks.append("\n".join(current_block))
++                current_block = [current_session_header]
++                session_has_selected_message = True
++            current_block.append(
++                self._format_message_memory(message, msg_dict["content"])
++            )
++
++        if current_block:
++            blocks.append("\n".join(current_block))
++
++        return "\n\n".join(blocks)
++
++    @staticmethod
++    def _format_message_memory(message: Message, content: str) -> str:
++        return content
++
++    @staticmethod
++    def _format_session_header(message: Message) -> str:
++        if message.timestamp:
++            timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S")
++        else:
++            timestamp = "unknown time"
++        return f"The following conversation takes place at {timestamp}."
++
++    @staticmethod
++    def _format_selected_session_header(message: Message) -> str:
++        if message.timestamp:
++            timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S")
++        else:
++            timestamp = "unknown time"
++        return f"The following selected conversation takes place at {timestamp}."
++
++    def _dump_context_if_enabled(
++        self,
++        *,
++        conversation_id: str,
++        query: str,
++        formatted_query: str,
++        conversation: Conversation | None,
++    ) -> None:
++        if self.context_dump_dir is None:
++            return
++
++        self.context_dump_dir.mkdir(parents=True, exist_ok=True)
++        self._context_dump_counter += 1
++        filename = "{}_{:04d}_{}.txt".format(
++            self._safe_filename(conversation_id),
++            self._context_dump_counter,
++            self._safe_filename(query[:80]) or "query",
++        )
++        path = self.context_dump_dir / filename
++        path.write_text(
++            self.build_context_dump(
++                conversation=conversation,
++                query=query,
++                formatted_query=formatted_query,
++            ),
++            encoding="utf-8",
++        )
++
++    @staticmethod
++    def _safe_filename(value: str) -> str:
++        safe = []
++        for char in value:
++            if char.isalnum() or char in "._-":
++                safe.append(char)
++            elif char.isspace():
++                safe.append("_")
++        return "".join(safe).strip("._-")[:120]
+diff --git a/methods/EverCore/evaluation/src/adapters/registry.py b/methods/EverCore/evaluation/src/adapters/registry.py
+index c934de3..535501c 100644
+--- a/methods/EverCore/evaluation/src/adapters/registry.py
++++ b/methods/EverCore/evaluation/src/adapters/registry.py
+@@ -22,6 +22,7 @@ _ADAPTER_MODULES = {
+     "evermemos_api": "evaluation.src.adapters.evermemos_api_adapter",
+     "memobase": "evaluation.src.adapters.memobase_adapter",
+     "supermemory": "evaluation.src.adapters.supermemory_adapter",
++    "attemory": "evaluation.src.adapters.attemory_adapter",
+     
+     # Future systems:
+     # "nemori": "evaluation.src.adapters.nemori_adapter",
+diff --git a/methods/EverCore/src/memory_layer/llm/openai_provider.py b/methods/EverCore/src/memory_layer/llm/openai_provider.py
+index 96ac717..e2438b4 100644
+--- a/methods/EverCore/src/memory_layer/llm/openai_provider.py
++++ b/methods/EverCore/src/memory_layer/llm/openai_provider.py
+@@ -129,7 +129,7 @@ class OpenAIProvider(LLMProvider):
+             "Authorization": f"Bearer {api_key}",
+         }
+         timeout = aiohttp.ClientTimeout(total=600)
+-        async with aiohttp.ClientSession(timeout=timeout) as session:
++        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+             async with session.post(
+                 f"{self.base_url}/chat/completions", json=data, headers=headers
+             ) as response:

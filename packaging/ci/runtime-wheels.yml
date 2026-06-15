@@ -1,0 +1,227 @@
+name: Runtime Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      atmcore_linux_cpu_sdk_url:
+        description: URL for attemory-core Linux CPU SDK tarball
+        required: true
+      atmcore_linux_cpu_sdk_sha256:
+        description: Optional SHA-256 for attemory-core Linux CPU SDK tarball
+        required: false
+      atmcore_linux_cuda_cu121_sdk_url:
+        description: URL for attemory-core Linux CUDA 12.1 SDK tarball
+        required: true
+      atmcore_linux_cuda_cu121_sdk_sha256:
+        description: Optional SHA-256 for attemory-core Linux CUDA 12.1 SDK tarball
+        required: false
+      atmcore_linux_cuda_cu124_sdk_url:
+        description: URL for attemory-core Linux CUDA 12.4 SDK tarball
+        required: true
+      atmcore_linux_cuda_cu124_sdk_sha256:
+        description: Optional SHA-256 for attemory-core Linux CUDA 12.4 SDK tarball
+        required: false
+      atmcore_linux_cuda_cu126_sdk_url:
+        description: URL for attemory-core Linux CUDA 12.6 SDK tarball
+        required: true
+      atmcore_linux_cuda_cu126_sdk_sha256:
+        description: Optional SHA-256 for attemory-core Linux CUDA 12.6 SDK tarball
+        required: false
+      atmcore_linux_cuda_cu129_sdk_url:
+        description: URL for attemory-core Linux CUDA 12.9 SDK tarball
+        required: true
+      atmcore_linux_cuda_cu129_sdk_sha256:
+        description: Optional SHA-256 for attemory-core Linux CUDA 12.9 SDK tarball
+        required: false
+      atmcore_linux_cuda_cu132_sdk_url:
+        description: URL for attemory-core Linux CUDA 13.2 SDK tarball
+        required: true
+      atmcore_linux_cuda_cu132_sdk_sha256:
+        description: Optional SHA-256 for attemory-core Linux CUDA 13.2 SDK tarball
+        required: false
+      atmcore_macos_metal_sdk_url:
+        description: URL for attemory-core macOS Metal SDK tarball
+        required: true
+      atmcore_macos_metal_sdk_sha256:
+        description: Optional SHA-256 for attemory-core macOS Metal SDK tarball
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  python-wheel:
+    name: Python wheel
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Build Python wheel
+        run: |
+          python -m pip install -U build
+          python -m build --wheel --outdir dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attemory-python-wheel
+          path: dist/attemory-*.whl
+
+  linux-cpu:
+    name: Linux CPU runtime wheel
+    runs-on: ubuntu-22.04
+    container:
+      image: quay.io/pypa/manylinux2014_x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download attemory-core SDK
+        env:
+          ATMCORE_SDK_URL: ${{ inputs.atmcore_linux_cpu_sdk_url }}
+          ATMCORE_SDK_SHA256: ${{ inputs.atmcore_linux_cpu_sdk_sha256 }}
+        run: |
+          mkdir -p /opt/attemory-core-sdk
+          curl -fsSL "$ATMCORE_SDK_URL" -o /tmp/attemory-core-sdk.tar.gz
+          if [ -n "${ATMCORE_SDK_SHA256:-}" ]; then
+            printf '%s  /tmp/attemory-core-sdk.tar.gz\n' "$ATMCORE_SDK_SHA256" | sha256sum -c -
+          fi
+          tar -xzf /tmp/attemory-core-sdk.tar.gz -C /opt/attemory-core-sdk --strip-components=1
+
+      - name: Build Linux CPU wheels
+        env:
+          ATTEMORY_ROOT: ${{ github.workspace }}
+          ATMCORE_SDK: /opt/attemory-core-sdk
+          DIST_DIR: ${{ github.workspace }}/dist
+          MANYLINUX_PLAT: manylinux2014_x86_64
+          SMOKE_TEST: "1"
+        run: packaging/scripts/build_linux_cpu_wheel.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attemory-linux-cpu-wheels
+          path: dist/attemory_runtime_linux_cpu-*.whl
+
+  linux-cuda:
+    name: Linux CUDA ${{ matrix.cuda_version }} runtime wheel
+    runs-on: ubuntu-22.04
+    container:
+      image: quay.io/pypa/manylinux2014_x86_64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda_tag: cu121
+            cuda_version: "12.1"
+          - cuda_tag: cu124
+            cuda_version: "12.4"
+          - cuda_tag: cu126
+            cuda_version: "12.6"
+          - cuda_tag: cu129
+            cuda_version: "12.9"
+          - cuda_tag: cu132
+            cuda_version: "13.2"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select attemory-core SDK URL
+        run: |
+          case "${{ matrix.cuda_tag }}" in
+            cu121)
+              echo 'ATMCORE_SDK_URL=${{ inputs.atmcore_linux_cuda_cu121_sdk_url }}' >> "$GITHUB_ENV"
+              echo 'ATMCORE_SDK_SHA256=${{ inputs.atmcore_linux_cuda_cu121_sdk_sha256 }}' >> "$GITHUB_ENV"
+              ;;
+            cu124)
+              echo 'ATMCORE_SDK_URL=${{ inputs.atmcore_linux_cuda_cu124_sdk_url }}' >> "$GITHUB_ENV"
+              echo 'ATMCORE_SDK_SHA256=${{ inputs.atmcore_linux_cuda_cu124_sdk_sha256 }}' >> "$GITHUB_ENV"
+              ;;
+            cu126)
+              echo 'ATMCORE_SDK_URL=${{ inputs.atmcore_linux_cuda_cu126_sdk_url }}' >> "$GITHUB_ENV"
+              echo 'ATMCORE_SDK_SHA256=${{ inputs.atmcore_linux_cuda_cu126_sdk_sha256 }}' >> "$GITHUB_ENV"
+              ;;
+            cu129)
+              echo 'ATMCORE_SDK_URL=${{ inputs.atmcore_linux_cuda_cu129_sdk_url }}' >> "$GITHUB_ENV"
+              echo 'ATMCORE_SDK_SHA256=${{ inputs.atmcore_linux_cuda_cu129_sdk_sha256 }}' >> "$GITHUB_ENV"
+              ;;
+            cu132)
+              echo 'ATMCORE_SDK_URL=${{ inputs.atmcore_linux_cuda_cu132_sdk_url }}' >> "$GITHUB_ENV"
+              echo 'ATMCORE_SDK_SHA256=${{ inputs.atmcore_linux_cuda_cu132_sdk_sha256 }}' >> "$GITHUB_ENV"
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Download attemory-core SDK
+        run: |
+          mkdir -p /opt/attemory-core-sdk
+          curl -fsSL "$ATMCORE_SDK_URL" -o /tmp/attemory-core-sdk.tar.gz
+          if [ -n "${ATMCORE_SDK_SHA256:-}" ]; then
+            printf '%s  /tmp/attemory-core-sdk.tar.gz\n' "$ATMCORE_SDK_SHA256" | sha256sum -c -
+          fi
+          tar -xzf /tmp/attemory-core-sdk.tar.gz -C /opt/attemory-core-sdk --strip-components=1
+
+      - name: Build Linux CUDA ${{ matrix.cuda_version }} wheels
+        env:
+          ATTEMORY_ROOT: ${{ github.workspace }}
+          ATMCORE_SDK: /opt/attemory-core-sdk
+          INSTALL_CUDA_TOOLKIT_WITH_MAMBA: "1"
+          DIST_DIR: ${{ github.workspace }}/dist
+          MANYLINUX_PLAT: manylinux2014_x86_64
+          SMOKE_TEST: "1"
+          CUDA_SMOKE_HELP: "0"
+        run: packaging/scripts/build_linux_cuda_wheel.sh --cuda ${{ matrix.cuda_tag }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attemory-linux-cuda-${{ matrix.cuda_tag }}-wheels
+          path: dist/attemory_runtime_linux_cuda_${{ matrix.cuda_tag }}-*.whl
+
+  macos-metal:
+    name: macOS Metal runtime wheel
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Download attemory-core SDK
+        env:
+          ATMCORE_SDK_URL: ${{ inputs.atmcore_macos_metal_sdk_url }}
+          ATMCORE_SDK_SHA256: ${{ inputs.atmcore_macos_metal_sdk_sha256 }}
+        run: |
+          mkdir -p /tmp/attemory-core-sdk
+          curl -fsSL "$ATMCORE_SDK_URL" -o /tmp/attemory-core-sdk.tar.gz
+          if [ -n "${ATMCORE_SDK_SHA256:-}" ]; then
+            printf '%s  /tmp/attemory-core-sdk.tar.gz\n' "$ATMCORE_SDK_SHA256" | shasum -a 256 -c -
+          fi
+          tar -xzf /tmp/attemory-core-sdk.tar.gz -C /tmp/attemory-core-sdk --strip-components=1
+
+      - name: Build macOS Metal wheels
+        env:
+          ATTEMORY_ROOT: ${{ github.workspace }}
+          ATMCORE_SDK: /tmp/attemory-core-sdk
+          DIST_DIR: ${{ github.workspace }}/dist
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          MACOS_ARCH: arm64
+          SMOKE_TEST: "1"
+        run: bash packaging/scripts/build_macos_metal_wheel.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: attemory-macos-metal-wheels
+          path: dist/attemory_runtime_macos_metal-*.whl

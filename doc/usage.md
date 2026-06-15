@@ -434,15 +434,21 @@ are read and scored, but they are not returned as `SearchResult` objects unless
 you also add the same text as a normal memory.
 
 ```text
-Read the conversations carefully and find the relevant memory.  # system
-
-user: ...
-assistant: ...                                                  # memories
-
-user: ...
-assistant: ...
-
-Query: What does ...                                            # query
++--------------------------------------------------------------+
+| # System prompt                                              |
+| Read the conversations carefully and find relevant memory.   |
++--------------------------------------------------------------+
+| # Memory candidates                                          |
+|                                                              |
+| user: ...                                                    |
+| assistant: ...                                               |
+|                                                              |
+| user: ...                                                    |
+| assistant: ...                                               |
++--------------------------------------------------------------+
+| # Final query                                                |
+| Query: What does ...                                         |
++--------------------------------------------------------------+
 ```
 
 For conversations, timestamps and other memory-local context often matter. Put
@@ -450,19 +456,30 @@ that context inside the memory text, close to the content it describes, and keep
 the format stable across retrieval passes:
 
 ```text
-Read the conversations carefully and find the relevant memory.  # system
-
-Memory date: 2026-04-21                                      # memory context
-Memory:
-user: ...
-assistant: ...                                                # memory
-
-Memory date: 2026-05-03                                      # memory context
-Memory:
-user: ...
-assistant: ...                                                # memory
-
-Query: What does ...                                          # query
++--------------------------------------------------------------+
+| # System prompt                                              |
+| Read the conversations carefully and find relevant memory.   |
++--------------------------------------------------------------+
+| # Memory candidates                                          |
+| +----------------------------------------------------------+ |
+| | # Memory-local context                                   | |
+| | Conversation date: 2026-04-21                            | |
+| +----------------------------------------------------------+ |
+| | user: ...                                                | |
+| | assistant: ...                                           | |
+| +----------------------------------------------------------+ |
+|                                                              |
+| +----------------------------------------------------------+ |
+| | # Memory-local context                                   | |
+| | Conversation date: 2026-05-03                            | |
+| +----------------------------------------------------------+ |
+| | user: ...                                                | |
+| | assistant: ...                                           | |
+| +----------------------------------------------------------+ |
++--------------------------------------------------------------+
+| # Final query                                                |
+| Query: What does ...                                         |
++--------------------------------------------------------------+
 ```
 
 When the query has long background information or request-time facts, use
@@ -472,33 +489,49 @@ interpret the question, but only the final query tokens are used for attention
 ranking. `query_context` itself is not a candidate memory and is not returned.
 
 ```text
-Read the conversations carefully and find the relevant memory.  # system
-
-The conversation took place on 2026-04-21.                   # memory context
-user: ...
-assistant: ...                                                # memory
-
-Focus on facts, people, places, dates, and user preferences.
-Current time: {query_time}                                    # query_context
-
-Query: What does ...                                          # query
++--------------------------------------------------------------+
+| # System prompt                                              |
+| Read the conversations carefully and find relevant memory.   |
++--------------------------------------------------------------+
+| # Memory candidates                                          |
+|                                                              |
+| Conversation date: 2026-04-21                                |
+| user: ...                                                    |
+| assistant: ...                                               |
++--------------------------------------------------------------+
+| # Query context                                              |
+| Focus on facts, people, places, dates, and user preferences. |
+| Current time: {query_time}                                   |
++--------------------------------------------------------------+
+| # Final query                                                |
+| Query: What does ...                                         |
++--------------------------------------------------------------+
 ```
 
 For complex retrieval tasks, it can help to repeat the question in
 `query_context`, add retrieval guidance, and then keep the final query concise:
 
 ```text
-Read the conversations carefully and find the relevant memory.  # system
-
-The conversation took place on 2026-04-21.
-user: ...
-assistant: ...                                                # memory
-
-Read the conversations above and answer this question: {query}
-Focus on facts, people, places, dates, and user preferences.
-Current time: {query_time}                                    # query_context
-
-Query: {query}                                                # query
++--------------------------------------------------------------+
+| # System prompt                                              |
+| Read the conversations carefully and find relevant memory.   |
++--------------------------------------------------------------+
+| Memory candidates                                            |
+|                                                              |
+| Conversation date: 2026-04-21                                |
+| user: ...                                                    |
+| assistant: ...                                               |
++--------------------------------------------------------------+
+| # Query context                                              |
+| Read the conversations above and answer this question:       |
+| {query}                                                      |
+|                                                              |
+| Focus on facts, people, places, dates, and user preferences. |
+| Current time: {query_time}                                   |
++--------------------------------------------------------------+
+| # Final query                                                |
+| Query: {query}                                               |
++--------------------------------------------------------------+
 ```
 
 This is the retrieval version of a repeat-prompt pattern: the model receives
@@ -521,19 +554,46 @@ model can recognize as useful evidence, and the filtering rule controls how
 aggressively each pass narrows the context.
 
 ```text
-Pass 1:
-  template(raw memories, query_context, query)
-  -> search
-  -> selected memories
-
-Pass 2:
-  template(selected memories, query_context, query)
-  -> search
-  -> smaller selected memories
-
-Pass N:
-  template(smaller selected memories, query_context, query)
-  -> final retrieved memories
++-------------------------------+
+| Pass 1 context                |
+| system prompt                 |
+| raw memories                  |
+| query_context                 |
+| query                         |
++-------------------------------+
+                |
+                v
++-------------------------------+
+| Search and keep top memories  |
++-------------------------------+
+                |
+                v
++-------------------------------+
+| Pass 2 context                |
+| system prompt                 |
+| selected memories             |
+| same query_context            |
+| same query                    |
++-------------------------------+
+                |
+                v
++-------------------------------+
+| Search and keep fewer items   |
++-------------------------------+
+                |
+                v
++-------------------------------+
+| Final context                 |
+| system prompt                 |
+| selected memories(fit one seg)|
+| same query_context            |
+| same query                    |
++-------------------------------+
+                |
+                v
++-------------------------------+
+| Final retrieved memories      |
++-------------------------------+
 ```
 
 Memory-local context, such as session headers, code filename hints,

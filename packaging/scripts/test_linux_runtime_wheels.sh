@@ -10,6 +10,7 @@ HOST="${HOST:-127.0.0.1}"
 SERVER_START_TIMEOUT="${SERVER_START_TIMEOUT:-3600}"
 MODEL_TIER="${MODEL_TIER:-tiny}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+CUDA_WHEEL_INDEX_ROOT="${CUDA_WHEEL_INDEX_ROOT:-https://attemorysystem.github.io/Attemory/whl}"
 
 usage() {
   cat <<'EOF'
@@ -17,7 +18,8 @@ Usage: test_linux_runtime_wheels.sh local|pip
 
 Modes:
   local  Install attemory and Linux runtime wheels from ./dist.
-  pip    Install each documented Linux runtime extra with pip.
+  pip    Install each documented Linux runtime extra with pip. CUDA extras use
+         the GitHub Pages wheel index from CUDA_WHEEL_INDEX_ROOT.
 
 Environment:
   ATTEMORY_ROOT          Repository root; defaults to the script's repo root.
@@ -26,6 +28,8 @@ Environment:
   SERVER_START_TIMEOUT   Seconds to wait for server health; defaults to 3600.
   MODEL_TIER             Server model tier; defaults to tiny.
   PIP_RUNTIME_EXTRAS     Space-separated extras for pip mode; defaults to doc/usage.md Linux extras.
+  CUDA_WHEEL_INDEX_ROOT   GitHub Pages wheel index root for CUDA pip tests.
+                          Defaults to https://attemorysystem.github.io/Attemory/whl.
 EOF
 }
 
@@ -93,6 +97,36 @@ runtime_backend() {
   else
     printf 'cpu\n'
   fi
+}
+
+cuda_index_tag_for_extra() {
+  local extra="$1"
+  case "${extra}" in
+    cuda|gpu|cuda-cu126|linux-cuda-cu126|linux-gpu-cu126)
+      printf 'cu126\n'
+      ;;
+    cuda-cu121|linux-cuda-cu121|linux-gpu-cu121)
+      printf 'cu121\n'
+      ;;
+    cuda-cu124|linux-cuda-cu124|linux-gpu-cu124)
+      printf 'cu124\n'
+      ;;
+    cuda-cu129|linux-cuda-cu129|linux-gpu-cu129)
+      printf 'cu129\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+pip_extra_index_url_for_extra() {
+  local extra="$1"
+  local cuda_tag
+  if ! cuda_tag="$(cuda_index_tag_for_extra "${extra}")"; then
+    return 1
+  fi
+  printf '%s/%s/\n' "${CUDA_WHEEL_INDEX_ROOT%/}" "${cuda_tag}"
 }
 
 find_free_port() {
@@ -169,6 +203,8 @@ run_one_runtime() (
   local backend
   local port
   local server_log
+  local extra_index_url
+  local pip_args
 
   if [[ "${install_mode}" == "local" ]]; then
     runtime_label="$(basename "${runtime_ref}")"
@@ -209,7 +245,13 @@ run_one_runtime() (
   if [[ "${install_mode}" == "local" ]]; then
     python -m pip install "${attemory_wheel}" "${runtime_ref}" || exit 1
   else
-    python -m pip install "${runtime_install_spec}" || exit 1
+    extra_index_url=""
+    pip_args=("${runtime_install_spec}")
+    if extra_index_url="$(pip_extra_index_url_for_extra "${runtime_ref}")"; then
+      log "CUDA wheel index: ${extra_index_url}"
+      pip_args+=(--extra-index-url "${extra_index_url}")
+    fi
+    python -m pip install "${pip_args[@]}" || exit 1
   fi
   python - <<'PY' || exit 1
 from attemory.runtime import resolve_runtime

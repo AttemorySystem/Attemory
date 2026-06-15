@@ -109,7 +109,10 @@ Install Attemory:
 ```bash
 uv pip install attemory           # macOS Apple Silicon, includes Metal runtime
 uv pip install "attemory[cpu]"    # Linux CPU
-uv pip install "attemory[cuda]"   # Linux + NVIDIA GPU
+
+# Linux CUDA
+uv pip install "attemory[cuda]" \
+  --extra-index-url https://attemorysystem.github.io/Attemory/whl/cu126/
 ```
 
 The same install targets work with `pip`:
@@ -117,16 +120,30 @@ The same install targets work with `pip`:
 ```bash
 pip install attemory
 pip install "attemory[cpu]"
-pip install "attemory[cuda]"
+pip install "attemory[cuda]" \
+  --extra-index-url https://attemorysystem.github.io/Attemory/whl/cu126/
 ```
 
 On macOS Apple Silicon, `attemory` automatically installs the Metal-capable
 runtime, which can run both `--backend metal` and `--backend cpu`. On Linux, a
 bare `attemory` install only installs the Python package; choose `cpu` or a CUDA
-extra explicitly. For CUDA runtime wheels, use `cuda-cu126` by default. If you
-are using a Blackwell GPU such as RTX 50 series, use `cuda-cu129`. Use
-`cuda-cu124` or `cuda-cu121` only when your NVIDIA driver is too old for CUDA
-12.6.
+extra explicitly. Use `cuda-cu126` by default:
+
+```bash
+pip install "attemory[cuda]" \
+  --extra-index-url https://attemorysystem.github.io/Attemory/whl/cu126/
+```
+
+If you are using a Blackwell GPU such as RTX 50 series, use `cuda-cu129` with
+the CUDA 12.9 wheel index:
+
+```bash
+pip install "attemory[cuda-cu129]" \
+  --extra-index-url https://attemorysystem.github.io/Attemory/whl/cu129/
+```
+
+Use `cuda-cu124` or `cuda-cu121` only when your NVIDIA driver is too old for
+CUDA 12.6.
 
 Start a local server:
 
@@ -232,16 +249,30 @@ for a complete runnable version.
 ## Build From Source
 
 Developers building Attemory from source need a C++17 compiler, CMake 3.18 or
-newer, and an attemory-core SDK. Pass the SDK root explicitly with
-`ATMCORE_SDK`; 
+newer, and an attemory-core SDK.
+
+Prebuilt `attemory-core-sdk` archives are published on the GitHub Releases
+page. Download the SDK that matches your target runtime, then extract it to a
+local directory:
+
+```bash
+mkdir -p 3rd/attemory-core-sdk
+tar -xzf attemory-core-sdk.tar.gz -C 3rd/attemory-core-sdk --strip-components=1
+```
+
+Then pass the extracted SDK root to CMake with `ATMCORE_SDK`:
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DATMCORE_SDK=/path/to/attemory-core-sdk
+  -DATMCORE_SDK="$PWD/3rd/attemory-core-sdk"
 
 cmake --build build --target attemory_server --parallel
 ```
+
+Use the matching SDK archive for CUDA or macOS Metal builds, for example
+`attemory-core-sdk-linux-cuda-cu126-...tar.gz` or
+`attemory-core-sdk-macos-metal-...tar.gz`.
 
 ## Future Work
 
@@ -264,7 +295,7 @@ If you use Attemory in research or benchmarks, please cite it as:
   title        = {Attemory: Attention-Native Memory Retrieval System},
   author       = {Lance Fang},
   year         = {2026},
-  url          = {TODO},
+  url          = {https://github.com/AttemorySystem/Attemory},
 }
 ```
 

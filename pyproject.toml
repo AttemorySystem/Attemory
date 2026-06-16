@@ -43,6 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.9,<2"]
+test = ["pytest>=8,<9"]
 cpu = ["attemory-runtime-linux-cpu==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
 gpu = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]
 cuda = ["attemory-runtime-linux-cuda-cu126==0.1.0; platform_system == 'Linux' and platform_machine == 'x86_64'"]

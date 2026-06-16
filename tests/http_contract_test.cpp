@@ -177,6 +177,42 @@ void test_memory_payload_schema_errors() {
     EXPECT_EQ(memory.text, "memory");
 }
 
+void test_text_payload_schema_and_size_errors() {
+    std::string text;
+    ErrorInfo error;
+
+    EXPECT_FALSE(attemory::server::parse_text_payload(
+        R"({"text":7})",
+        "add-system",
+        "text",
+        text,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "field"), "text");
+    EXPECT_EQ(detail_value(error, "expected"), "string");
+
+    EXPECT_FALSE(attemory::server::parse_text_payload(
+        R"({"text":"ok","extra":"nope"})",
+        "add-system",
+        "text",
+        text,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "location"), "add-system request");
+    EXPECT_EQ(detail_value(error, "field"), "extra");
+
+    const std::string too_long(4ull * 1024ull * 1024ull + 1ull, 'x');
+    EXPECT_FALSE(attemory::server::parse_text_payload(
+        std::string(R"({"text":")") + too_long + R"("})",
+        "add-system",
+        "text",
+        text,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "field"), "text");
+    EXPECT_EQ(detail_value(error, "max_bytes"), "4194304");
+}
+
 void test_search_payload_schema() {
     attemory::server::SearchRequest parsed;
     ErrorInfo error;
@@ -225,6 +261,26 @@ void test_search_payload_schema() {
         error));
     EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
     EXPECT_EQ(detail_value(error, "field"), "top_k_per_segment");
+
+    EXPECT_TRUE(attemory::server::parse_search_payload(
+        R"({"query":"needle","top_k":0})",
+        parsed,
+        error));
+    EXPECT_EQ(parsed.search_overrides.top_k, 0);
+
+    EXPECT_FALSE(attemory::server::parse_search_payload(
+        R"({"query":"needle","top_k":2147483648})",
+        parsed,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "field"), "top_k");
+
+    EXPECT_FALSE(attemory::server::parse_search_payload(
+        R"(["query"])",
+        parsed,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "expected"), "JSON object");
 }
 
 void test_oneshot_payload_id_contract() {
@@ -251,6 +307,23 @@ void test_oneshot_payload_id_contract() {
     EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
     EXPECT_EQ(detail_value(error, "field"), "memories");
     EXPECT_EQ(detail_value(error, "expected"), "array");
+
+    EXPECT_FALSE(attemory::server::parse_oneshot_search_payload(
+        R"({"system":"system","query":"query","memories":[{"text":"a","file":"a.py"}]})",
+        parsed,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "location"), "oneshot-search memory entry");
+    EXPECT_EQ(detail_value(error, "field"), "file");
+
+    EXPECT_FALSE(attemory::server::parse_oneshot_search_payload(
+        R"({"system":"system","query":"query","memories":["a"]})",
+        parsed,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "field"), "memories");
+    EXPECT_EQ(detail_value(error, "index"), "0");
+    EXPECT_EQ(detail_value(error, "expected"), "object");
 }
 
 void test_oneshot_response_omits_idx_and_preserves_optional_id() {
@@ -308,6 +381,7 @@ int main() {
     test_json_content_type_validation();
     test_empty_body_validation();
     test_memory_payload_schema_errors();
+    test_text_payload_schema_and_size_errors();
     test_search_payload_schema();
     test_oneshot_payload_id_contract();
     test_oneshot_response_omits_idx_and_preserves_optional_id();

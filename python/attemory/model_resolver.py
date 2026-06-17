@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
+from ._version import __version__
 from .runtime import RuntimeInfo, resolve_runtime, runtime_environment
 
 
@@ -273,7 +274,7 @@ def _hf_endpoint() -> str:
 
 
 def _request_headers() -> dict[str, str]:
-    headers = {"User-Agent": "attemory/0.1"}
+    headers = {"User-Agent": f"attemory/{__version__}"}
     token = _hf_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"

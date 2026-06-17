@@ -253,12 +253,7 @@ def _read_memories(args: argparse.Namespace) -> list[MemoryInput]:
         memories.append(MemoryInput(text=text))
     for filename in args.memory_file:
         path = Path(filename)
-        memories.append(
-            MemoryInput(
-                text=path.read_text(encoding="utf-8"),
-                file=path.as_posix(),
-            )
-        )
+        memories.append(MemoryInput(text=path.read_text(encoding="utf-8")))
     if args.memories_json:
         loaded = json.loads(Path(args.memories_json).read_text(encoding="utf-8"))
         if isinstance(loaded, dict):

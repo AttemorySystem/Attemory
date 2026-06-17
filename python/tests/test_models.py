@@ -5,31 +5,23 @@ import pytest
 from attemory.models import MemoryInput, SearchResult, SessionStatus, TokenUsage, to_jsonable
 
 
-def test_memory_input_accepts_code_alias_but_sends_text_only() -> None:
-    memory = MemoryInput.from_value(
-        {
-            "id": "chunk-1",
-            "code": "print('hello')",
-            "file": "demo.py",
-            "lines": "1",
-        },
-        0,
-    )
+def test_memory_input_sends_text_and_optional_id() -> None:
+    memory = MemoryInput.from_value({"id": "chunk-1", "text": "print('hello')"}, 0)
 
-    assert memory.content == "print('hello')"
-    assert memory.file == "demo.py"
-    assert memory.lines == "1"
     assert memory.to_request_json() == {
         "id": "chunk-1",
         "text": "print('hello')",
     }
 
 
-def test_memory_input_prefers_text_over_code() -> None:
-    memory = MemoryInput.from_value({"text": "plain text", "code": "ignored"}, 0)
+def test_memory_input_rejects_unsupported_fields() -> None:
+    for field in ("code", "file", "lines"):
+        with pytest.raises(TypeError, match=f"unsupported memory field: {field}"):
+            MemoryInput.from_value({"text": "plain text", field: "ignored"}, 0)
 
-    assert memory.content == "plain text"
-    assert memory.to_request_json() == {"text": "plain text"}
+    assert MemoryInput.from_value({"text": "plain text"}, 0).to_request_json() == {
+        "text": "plain text"
+    }
 
 
 def test_memory_input_rejects_non_string_fields() -> None:

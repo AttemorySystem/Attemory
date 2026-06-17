@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 
 JsonDict = dict[str, Any]
+_MEMORY_INPUT_FIELDS = {"id", "text"}
 
 
 def _as_int(value: Any, *, default: int = 0) -> int:
@@ -39,13 +40,6 @@ class MemoryInput:
 
     text: str = ""
     id: str | None = None
-    file: str | None = None
-    lines: str | None = None
-    code: str | None = None
-
-    @property
-    def content(self) -> str:
-        return self.text if self.text else (self.code or "")
 
     @classmethod
     def from_value(cls, value: MemoryInput | Mapping[str, Any] | str, index: int) -> MemoryInput:
@@ -54,26 +48,24 @@ class MemoryInput:
         elif isinstance(value, str):
             memory = cls(text=value)
         elif isinstance(value, Mapping):
-            text = value.get("text", value.get("code", ""))
+            unknown_fields = set(value) - _MEMORY_INPUT_FIELDS
+            if unknown_fields:
+                field = sorted(str(key) for key in unknown_fields)[0]
+                raise TypeError(f"unsupported memory field: {field}")
+            text = value.get("text", "")
             if not isinstance(text, str):
                 raise TypeError("memory field text must be a string")
             raw_id = value.get("id")
             if raw_id is not None and not isinstance(raw_id, str):
                 raise TypeError("memory field id must be a string")
-            memory = cls(
-                text=text,
-                id=raw_id,
-                file=value.get("file") if isinstance(value.get("file"), str) else None,
-                lines=value.get("lines") if isinstance(value.get("lines"), str) else None,
-                code=value.get("code") if isinstance(value.get("code"), str) else None,
-            )
+            memory = cls(text=text, id=raw_id)
         else:
             raise TypeError(f"unsupported memory value: {type(value).__name__}")
 
         return memory
 
     def to_request_json(self) -> JsonDict:
-        body = {"text": self.content}
+        body = {"text": self.text}
         if self.id is not None:
             body["id"] = self.id
         return body

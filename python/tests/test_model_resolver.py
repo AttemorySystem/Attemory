@@ -69,6 +69,14 @@ def test_hf_cache_dir_honors_environment_precedence(
     assert model_resolver._hf_cache_dir() == tmp_path / "hf-home" / "hub"
 
 
+def test_request_headers_uses_package_version(monkeypatch: Any) -> None:
+    monkeypatch.setattr(model_resolver, "__version__", "1.2.3")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    assert model_resolver._request_headers() == {"User-Agent": "attemory/1.2.3"}
+
+
 def test_relative_filename_rejects_unsafe_paths() -> None:
     with pytest.raises(model_resolver.ModelResolverError, match="unsafe"):
         model_resolver._relative_filename("../model.gguf")

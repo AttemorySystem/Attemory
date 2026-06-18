@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.18)
 project(attemory LANGUAGES C CXX)
 
 enable_testing()
+option(ATTEMORY_BUILD_TESTS "Build attemory C++ tests" ON)
+option(ATTEMORY_BUILD_MODEL_TESTS "Build C++ tests that require a model at runtime" ON)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -224,28 +226,66 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_options(attemory_server PRIVATE "LINKER:--as-needed")
 endif()
 
-add_executable(attemory_http_contract_test
-    tests/http_contract_test.cpp
-)
-target_include_directories(attemory_http_contract_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${ATMCORE_INCLUDE_DIR}
-)
-target_link_libraries(attemory_http_contract_test PRIVATE
-    attemory_server_http
-)
-attemory_configure_native_executable(attemory_http_contract_test)
-add_test(NAME attemory_http_contract_test COMMAND attemory_http_contract_test)
+function(attemory_add_cpp_test target)
+    set(options)
+    set(one_value_args)
+    set(multi_value_args SOURCES LIBS LABELS)
+    cmake_parse_arguments(TEST "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+    if (NOT TEST_SOURCES)
+        message(FATAL_ERROR "attemory_add_cpp_test(${target}) requires SOURCES")
+    endif()
 
-add_executable(attemory_incremental_index_test
-    tests/incremental_index_test.cpp
-)
-target_include_directories(attemory_incremental_index_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${ATMCORE_INCLUDE_DIR}
-)
-target_link_libraries(attemory_incremental_index_test PRIVATE
-    attemory_context
-)
-attemory_configure_native_executable(attemory_incremental_index_test)
-add_test(NAME attemory_incremental_index_test COMMAND attemory_incremental_index_test)
+    add_executable(${target} ${TEST_SOURCES})
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${ATMCORE_INCLUDE_DIR}
+    )
+    if (TEST_LIBS)
+        target_link_libraries(${target} PRIVATE ${TEST_LIBS})
+    endif()
+    attemory_configure_native_executable(${target})
+    add_test(NAME ${target} COMMAND ${target})
+    if (TEST_LABELS)
+        set_tests_properties(${target} PROPERTIES LABELS "${TEST_LABELS}")
+    endif()
+endfunction()
+
+if (ATTEMORY_BUILD_TESTS)
+    attemory_add_cpp_test(attemory_server_request_parser_test
+        SOURCES tests/server_request_parser_test.cpp
+        LIBS attemory_server_http
+        LABELS unit
+    )
+    attemory_add_cpp_test(attemory_server_response_builder_test
+        SOURCES tests/server_response_builder_test.cpp
+        LIBS attemory_server_http
+        LABELS unit
+    )
+    attemory_add_cpp_test(attemory_search_results_test
+        SOURCES tests/search_results_test.cpp
+        LIBS attemory_context
+        LABELS unit
+    )
+    attemory_add_cpp_test(attemory_persistent_session_test
+        SOURCES tests/persistent_session_test.cpp
+        LIBS attemory_persistent
+        LABELS unit
+    )
+    attemory_add_cpp_test(attemory_http_contract_test
+        SOURCES tests/http_contract_test.cpp
+        LIBS attemory_server_http
+        LABELS integration
+    )
+
+    if (ATTEMORY_BUILD_MODEL_TESTS)
+        attemory_add_cpp_test(attemory_incremental_index_test
+            SOURCES tests/incremental_index_test.cpp
+            LIBS attemory_context
+            LABELS model
+        )
+        set_tests_properties(attemory_incremental_index_test PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^skip:"
+        )
+    endif()
+endif()

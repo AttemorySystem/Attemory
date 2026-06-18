@@ -39,6 +39,18 @@ size_t query_stage_context_token_count(const atmcore::SearchQueryTokens & tokens
     return tokens.context_tokens.size() + tokens.query_tokens.size();
 }
 
+void demote_removed_resident_metadata(Session & session, int32_t segment_id) {
+    persistent::KVCacheEntry * cache = find_segment_kv_metadata(session, segment_id);
+    if (cache == nullptr ||
+        cache->state != persistent::CacheState::Resident) {
+        return;
+    }
+
+    cache->state = persistent::kv_cache_state_exists(*cache)
+        ? persistent::CacheState::DiskOnly
+        : persistent::CacheState::Missing;
+}
+
 } // namespace
 
 SegmentSearchRunner::SegmentSearchRunner(
@@ -56,6 +68,10 @@ bool SegmentSearchRunner::run_cached(
     std::vector<AttentionMemoryRef> & ordered_memories,
     std::string & error) {
     error.clear();
+
+    const bool stream_resident_segments =
+        kv_manager_.resident_budget_bytes() == 0 &&
+        session_.segment_plan.segments.size() > 1;
 
     for (const Segment * segment_ptr : sorted_segments_by_id(session_.segment_plan)) {
         const Segment & segment = *segment_ptr;
@@ -87,6 +103,12 @@ bool SegmentSearchRunner::run_cached(
 
         kv_manager_.sync_active_search_cache_to_resident();
         merge_segment_ranked_results(session_.store, segment, inference.ranked_memories, ordered_memories);
+
+        if (stream_resident_segments) {
+            kv_manager_.remove_resident_segment(session_.store.session_id, segment.segment_id);
+            demote_removed_resident_metadata(session_, segment.segment_id);
+            kv_manager_.clear_active();
+        }
     }
 
     return true;

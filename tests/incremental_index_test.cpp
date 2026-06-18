@@ -1,5 +1,7 @@
 #include "context/context.h"
 
+#include "tests/test_support.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -10,31 +12,6 @@
 #include <vector>
 
 namespace {
-
-int g_failures = 0;
-
-void fail(const std::string & message, const char * file, int line) {
-    std::cerr << file << ":" << line << ": " << message << "\n";
-    ++g_failures;
-}
-
-#define EXPECT_TRUE(expr) \
-    do { \
-        if (!(expr)) { \
-            fail(std::string("expectation failed: ") + #expr, __FILE__, __LINE__); \
-        } \
-    } while (false)
-
-#define EXPECT_EQ(actual, expected) \
-    do { \
-        const auto actual_value = (actual); \
-        const auto expected_value = (expected); \
-        if (!(actual_value == expected_value)) { \
-            std::ostringstream oss; \
-            oss << "expectation failed: " << #actual << " == " << #expected; \
-            fail(oss.str(), __FILE__, __LINE__); \
-        } \
-    } while (false)
 
 std::vector<int32_t> parse_v(const char * value) {
     std::vector<int32_t> result;
@@ -61,7 +38,8 @@ attemory::context::MemoryInput memory(std::string text) {
 
 void require_ok(const attemory::context::CommandResult & result, const char * command) {
     if (!result.ok) {
-        fail(std::string(command) + " failed: " + result.error, __FILE__, __LINE__);
+        std::cerr << command << " failed: " << result.error << "\n";
+        EXPECT_TRUE(result.ok);
     }
 }
 
@@ -149,8 +127,9 @@ int main() {
     attemory::context::AttemoryContext context;
     std::string error;
     if (!context.init(options, error)) {
-        fail("context init failed: " + error, __FILE__, __LINE__);
-        return 1;
+        std::cerr << "context init failed: " << error << "\n";
+        EXPECT_TRUE(false);
+        return attemory::test::test_main_result("incremental index test");
     }
 
     const std::string system =
@@ -169,5 +148,5 @@ int main() {
 
     context.shutdown();
     std::filesystem::remove_all(root);
-    return g_failures == 0 ? 0 : 1;
+    return attemory::test::test_main_result("incremental index test");
 }

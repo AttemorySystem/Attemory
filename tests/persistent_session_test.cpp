@@ -28,6 +28,7 @@ attemory::persistent::SessionStore demo_store() {
     store.session_id = "demo";
     store.system_text = "system prompt";
     store.system_locked = true;
+    store.kv_persist = true;
     store.next_memory_idx = 3;
     store.memories.push_back(memory_record(0, "m0", "first memory", 11));
     store.memories.push_back(memory_record(2, "", "second memory", 13));
@@ -64,6 +65,7 @@ void test_save_load_and_scan_session_store() {
     EXPECT_EQ(loaded.session_id, "demo");
     EXPECT_EQ(loaded.system_text, "system prompt");
     EXPECT_TRUE(loaded.system_locked);
+    EXPECT_TRUE(loaded.kv_persist);
     EXPECT_EQ(loaded.next_memory_idx, 3);
     EXPECT_EQ(loaded.memories.size(), static_cast<size_t>(2));
     EXPECT_EQ(loaded.memories[0].memory_idx, 0);

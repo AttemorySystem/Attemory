@@ -66,6 +66,27 @@ def test_result_parsers_reject_bool_as_integer() -> None:
         SearchResult.from_json({"rank": True, "text": "memory"})
 
 
+def test_session_status_parses_kv_persist() -> None:
+    status = SessionStatus.from_json(
+        {
+            "session_id": "demo",
+            "memory_count": 1,
+            "segment_count": 1,
+            "total_tokens": 10,
+            "resident_segments": 0,
+            "indexed_segments": 1,
+            "saved_segments": 1,
+            "indexed": True,
+            "disk_cached": True,
+            "plan_ready": True,
+            "facts_dirty": False,
+            "kv_persist": True,
+        }
+    )
+
+    assert status.kv_persist is True
+
+
 def test_session_status_requires_boolean_fields() -> None:
     with pytest.raises(TypeError, match="expected boolean"):
         SessionStatus.from_json(

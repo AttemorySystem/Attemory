@@ -39,6 +39,11 @@ bool parse_text_payload(
     std::string & text,
     attemory::context::ErrorInfo & error);
 
+bool parse_create_session_payload(
+    const std::string & payload,
+    attemory::context::CreateSessionOptions & options,
+    attemory::context::ErrorInfo & error);
+
 bool parse_memory_payload(
     const std::string & payload,
     attemory::context::MemoryInput & memory,

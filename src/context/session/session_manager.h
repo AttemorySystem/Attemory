@@ -26,7 +26,9 @@ public:
     std::vector<SessionStatus> list_sessions();
     const persistent::SessionStore * session_store(const std::string & session_id) const;
 
-    CommandResult create_session(const std::string & session_id);
+    CommandResult create_session(
+        const std::string & session_id,
+        const CreateSessionOptions & options = {});
     CommandResult restore_session(const std::string & session_id);
     CommandResult add_system(const std::string & session_id, const std::string & system);
     CommandResult add_memory(const std::string & session_id, const MemoryInput & memory);

@@ -49,7 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_simple_command(subparsers, "health", run_health)
     _add_simple_command(subparsers, "sessions", run_sessions)
-    _add_session_command(subparsers, "create", run_create)
+    create = _add_session_command(subparsers, "create", run_create)
+    create.add_argument("--kv-persist", action="store_true", help="persist segment KV during index")
     _add_session_command(subparsers, "delete", run_delete)
     _add_session_command(subparsers, "restore", run_restore)
     _add_session_command(subparsers, "clear-cache", run_clear_cache)
@@ -153,7 +154,7 @@ def run_sessions(client: AttemoryClient, _: argparse.Namespace) -> list[Any]:
 
 
 def run_create(client: AttemoryClient, args: argparse.Namespace) -> Any:
-    return client.create_session(_session_id(client, args))
+    return client.create_session(_session_id(client, args), kv_persist=args.kv_persist)
 
 
 def run_delete(client: AttemoryClient, args: argparse.Namespace) -> Any:

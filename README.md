@@ -158,11 +158,13 @@ points are `--tiny` for CPU or small local tests, `--small` for GPUs with about
 5 GB VRAM, `--medium` for about 8 GB VRAM, and `--large` for about 12 GB VRAM.
 Actual memory use also depends on context length and KV type.
 
-Persistent session data and KV cache data are stored on disk. By default,
-session data uses `$XDG_DATA_HOME/attemory/sessions` or
-`~/.local/share/attemory/sessions`, and KV cache data uses
-`$XDG_CACHE_HOME/attemory` or `~/.cache/attemory`. Use `ATTEMORY_DATA_DIR`,
-`ATTEMORY_CACHE_DIR`, or `--cache-dir` when you need explicit storage paths.
+Persistent session data is stored on disk. Saved segment KV cache data is stored
+on disk after `save_session()` or when a session is created with
+`kv_persist=True` and indexed. By default, session data uses
+`$XDG_DATA_HOME/attemory/sessions` or `~/.local/share/attemory/sessions`, and KV
+cache data uses `$XDG_CACHE_HOME/attemory` or `~/.cache/attemory`. Use
+`ATTEMORY_DATA_DIR`, `ATTEMORY_CACHE_DIR`, or `--cache-dir` when you need
+explicit storage paths.
 
 For the full usage guide, including Python APIs, CLI commands, server options,
 model tiers, context templates, and persistence, see [`doc/usage.md`](doc/usage.md).

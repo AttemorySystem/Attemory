@@ -12,7 +12,7 @@ namespace attemory::persistent {
 namespace {
 
 constexpr uint32_t kSessionStoreMagic = 0x414d5331u;
-constexpr uint32_t kSessionStoreVersion = 1;
+constexpr uint32_t kSessionStoreVersion = 2;
 constexpr uint32_t kSessionMemoriesMagic = 0x414d4d31u;
 constexpr uint32_t kSessionMemoriesVersion = 1;
 constexpr uint64_t kMaxSessionMemoryRecords = 1000000;
@@ -51,7 +51,7 @@ bool read_memory_record(
 }
 
 bool is_supported_session_store_version(uint32_t version) {
-    return version == kSessionStoreVersion;
+    return version == 1 || version == kSessionStoreVersion;
 }
 
 bool is_supported_session_memories_version(uint32_t version) {
@@ -76,6 +76,7 @@ ResultStatus write_store_metadata_to_path(
         write_string(out, store.session_id) &&
         write_string(out, store.system_text) &&
         write_bool(out, store.system_locked) &&
+        write_bool(out, store.kv_persist) &&
         write_pod(out, store.next_memory_idx) &&
         write_i64_vector(out, store.manual_segment_boundaries) &&
         write_pod(out, (uint64_t) store.memories.size());
@@ -169,8 +170,13 @@ ResultStatus read_store_metadata_from_path(
     if (!read_pod(in, store.schema_version) ||
         !read_string(in, store.session_id) ||
         !read_string(in, store.system_text) ||
-        !read_bool(in, store.system_locked) ||
-        !read_pod(in, store.next_memory_idx) ||
+        !read_bool(in, store.system_locked)) {
+        return {false, "failed to read session store body"};
+    }
+    if (version >= 2 && !read_bool(in, store.kv_persist)) {
+        return {false, "failed to read session store body"};
+    }
+    if (!read_pod(in, store.next_memory_idx) ||
         !read_i64_vector(in, store.manual_segment_boundaries)) {
         return {false, "failed to read session store body"};
     }

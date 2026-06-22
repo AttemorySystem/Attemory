@@ -115,6 +115,19 @@ CommandResult run_search(
         result.ok = false;
         return result;
     }
+    if (context.command.run_log) {
+        std::fprintf(
+            stderr,
+            "search-query-stage session=%s query_context_chars=%zu query_chars=%zu "
+            "context_tokens=%zu query_tokens=%zu query_stage_tokens=%zu\n",
+            session.store.session_id.c_str(),
+            input.query_context.size(),
+            input.query.size(),
+            query_stage_tokens.context_tokens.size(),
+            query_stage_tokens.query_tokens.size(),
+            query_stage_context_token_count(query_stage_tokens));
+        std::fflush(stderr);
+    }
 
     result = success_result(ResultPayload::Search);
     SegmentSearchRunner runner(context, kv_manager, session, query_stage_tokens);

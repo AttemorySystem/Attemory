@@ -25,10 +25,10 @@ the memories most relevant to a query.
 | Session | A named memory space, usually one user, project, repository, or agent memory. |
 | Memory | One text item you add to a session. A memory can carry an optional client-defined `id`; Attemory stores and returns it but does not enforce uniqueness. Memory text is limited to 4 MB, and `id` is limited to 4096 bytes. |
 | Segment | A group of memories that fits within the active model context. Large sessions are split into segments internally; current Attemory tiers use Qwen3.5 models with a 262,144-token context window. |
-| Index | The step that builds searchable KV state for a session or segment. Search is fast only after indexing. |
+| Index | The step that builds searchable KV state for a session or segment. Search is fast only after indexing. For `kv_persist` sessions, indexing also writes segment KV cache state to disk. |
 | Search | Retrieval over an indexed session. If the session has multiple segments, it returns per-segment ranked memories. |
 | One-shot search | Retrieval over a supplied memory list without creating or saving a persistent session. It is useful when the candidate set is temporary. |
-| Save session | Persist an indexed session and its reusable cache state to disk so it can be restored later. |
+| Save session | Persist a default session's indexed reusable cache state to disk and mark it as `kv_persist`. For an existing `kv_persist` session, segment KV persistence happens during indexing. |
 | Restore session | Load a previously saved session back into the running server before searching or updating it. |
 
 A typical persistent workflow is:
@@ -37,7 +37,7 @@ A typical persistent workflow is:
 2. Add memories.
 3. Index the session.
 4. Search with a query and optional `query_context`.
-5. Optionally save the session for later reuse.
+5. Optionally save the session for later reuse, or create it with `kv_persist=True` so indexing writes segment KV cache state to disk.
 
 If a saved session is not currently loaded, restore it before searching or
 updating it.
@@ -213,6 +213,7 @@ processes when workloads need isolation.
 | `--cache-dir DIR` | KV cache directory. |
 | `--model PATH` or `-m PATH` | Use an already downloaded local GGUF model file instead of resolving and downloading a built-in tier model. Only Q8_0 GGUF models are currently tested. |
 | `--kv-type TYPE` | Override both KV tensor types. Default is `q4_0`. |
+| `--resident-kv-budget SIZE` | RAM budget for Attemory-managed resident KV snapshots, for example `4g`. This is not a GPU VRAM cap; GPU live active KV and CUDA work buffers are managed separately. |
 | `--search-top-k N` | Default number of results returned from each segment. |
 | `--search-candidate-top-k N` | Used inside attention search ranking. |
 | `--http-log`, `--no-http-log` | Enable or disable HTTP request logs. Disabled by default. |
@@ -260,8 +261,12 @@ and `-`. The reserved path components `.` and `..` are rejected.
 
 ## Persistent Session Workflow
 
-A persistent session stores memories, builds searchable KV state, and can be
-saved to disk for later use and search.
+A session stores memories on disk and builds searchable segment KV state for
+search. By default, `index_session()` builds resident KV cache in memory;
+`save_session()` persists the indexed KV cache to disk and marks the session as
+`kv_persist`. If the session is created with `kv_persist=True`,
+`index_session()` writes segment KV cache state to disk while it indexes, which
+is useful for multi-segment sessions or constrained resident RAM budgets.
 
 ```python
 from attemory import AttemoryClient, MemoryInput
@@ -287,8 +292,8 @@ client.add_memory(
 
 client.index_session()
 
-# The memories are searchable after indexing. Save when the session should
-# survive server restart.
+# The memories are searchable after indexing. Save when a default session's
+# indexed KV cache should survive server restart.
 client.save_session()
 
 results = client.search("How should I write updates for Alice?")
@@ -301,19 +306,28 @@ For a session with multiple segments, `search()` returns per-segment results.
 Use the iterative context filtering pattern below when a large context needs
 additional passes.
 
+To persist segment KV during indexing instead of waiting for an explicit save,
+create the session with `kv_persist=True`:
+
+```python
+client.create_session(kv_persist=True)
+client.add_memory("The blue key is inside the ceramic bowl")
+client.index_session()
+```
+
 Core methods:
 
 | Method | Purpose |
 | --- | --- |
 | `health()` | Check server health. |
 | `list_sessions()` | Return all the sessions and their status. |
-| `create_session(session_id=None)` | Create a session. |
+| `create_session(session_id=None, kv_persist=False)` | Create a session. When `kv_persist=True`, indexing writes segment KV cache state to disk. |
 | `delete_session(session_id=None)` | Delete a session. |
 | `add_system(text, session_id=None)` | Add the system prompt used for memory reading. |
 | `add_memory(memory, session_id=None, id=None)` | Add one memory string, mapping, or `MemoryInput`. |
 | `next_segment(session_id=None)` | Seal the current segment and start a new one. |
-| `index_session(session_id=None)` | Build searchable KV state for the session. |
-| `save_session(session_id=None)` | Persist session metadata and KV cache state. |
+| `index_session(session_id=None)` | Build searchable KV state for the session. For `kv_persist` sessions, also persist segment KV cache state. |
+| `save_session(session_id=None)` | Persist a default session's indexed KV cache state and mark it as `kv_persist`; for an existing `kv_persist` session, persist dirty session metadata and return the current save summary. |
 | `restore_session(session_id=None)` | Load session metadata into the server. |
 | `clear_cache(session_id=None)` | Clear resident KV cache for a loaded session. |
 | `search(query, session_id=None, query_context=None, top_k=None)` | Return ranked memories. |
@@ -333,9 +347,10 @@ Core methods:
 | `indexed_segments` | Segments with built KV search state. |
 | `saved_segments` | Segments with persisted KV cache state. |
 | `indexed` | True when all required segments are indexed. |
-| `disk_cached` | True when disk cache is available. |
+| `disk_cached` | True when all planned segments have persisted KV cache state. |
 | `plan_ready` | True when the session segment plan is ready. |
 | `facts_dirty` | True when session metadata changed after the last save. |
+| `kv_persist` | True when the session is configured to persist segment KV cache state during indexing. |
 
 Example:
 
@@ -669,6 +684,7 @@ Examples:
 ```bash
 attemory --session demo health
 attemory --session demo create
+# Use create --kv-persist instead when segment KV should persist during indexing.
 attemory --session demo add-system --text "Read memories carefully."
 attemory --session demo add-memory --id pref-1 --text "Alice likes concise updates."
 attemory --session demo add-memory --id file-1 --file memory.txt
@@ -690,12 +706,12 @@ CLI commands:
 | --- | --- |
 | `health` | Check server health. |
 | `sessions` | List loaded sessions. |
-| `create [session_id]` | Create a session. |
+| `create [session_id] [--kv-persist]` | Create a session. With `--kv-persist`, indexing writes segment KV cache state to disk. |
 | `delete [session_id]` | Delete a loaded session. |
 | `restore [session_id]` | Restore a persisted session. |
 | `clear-cache [session_id]` | Clear resident KV cache. |
-| `index [session_id]` | Build searchable KV state. |
-| `save [session_id]` | Persist session and cache state. |
+| `index [session_id]` | Build searchable KV state. For `kv_persist` sessions, also persist segment KV cache state. |
+| `save [session_id]` | Persist a default session's indexed KV cache state and mark it as `kv_persist`; for an existing `kv_persist` session, persist dirty session metadata and return the current save summary. |
 | `next-segment [session_id]` | Seal the current segment. |
 | `add-system [session_id]` | Add a system prompt. |
 | `add-memory [session_id]` | Add memory text with optional `--id`. |

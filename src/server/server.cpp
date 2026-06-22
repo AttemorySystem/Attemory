@@ -49,7 +49,7 @@ void print_startup_log(
         opts.cache_dir.c_str());
     std::fprintf(
         stderr,
-        "search_candidate_top_k=%d search_top_k=%d resident_kv_budget_bytes=%llu\n",
+        "search_candidate_top_k=%d search_top_k=%d resident_kv_ram_budget_bytes=%llu\n",
         info.search.candidate_top_k,
         info.search.top_k,
         (unsigned long long) info.resident_kv_budget_bytes);

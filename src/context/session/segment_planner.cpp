@@ -64,6 +64,19 @@ static bool estimate_new_segment_token_count(
     return atmcore::estimate_memory_kv_token_count(core, runtime, system, memories, token_count, error);
 }
 
+static bool estimate_segment_token_count_with_extra_memory(
+    atmcore::Runtime * core,
+    const RuntimeOptions & runtime,
+    const SessionFacts & facts,
+    const Segment & segment,
+    const std::string & memory,
+    int32_t & token_count,
+    std::string & error) {
+    std::vector<std::string> memories = collect_segment_memory_texts(facts, segment);
+    memories.push_back(memory);
+    return atmcore::estimate_memory_kv_token_count(core, runtime, facts.system_text, memories, token_count, error);
+}
+
 static bool rebuild_segment_plan_fast(
     atmcore::Runtime * core,
     const RuntimeOptions & runtime,
@@ -108,17 +121,16 @@ static bool rebuild_segment_plan_fast(
         int32_t candidate_existing_tokens = -1;
 
         if (!need_new_segment && last_segment != nullptr) {
-            std::string memory_segment;
-            if (!last_segment->memory_indices.empty()) {
-                memory_segment += "\n";
-            }
-            memory_segment += memory.text;
-
-            int32_t delta_tokens = 0;
-            if (!estimate_memory_text_tokens(core, memory_segment, delta_tokens, error)) {
+            if (!estimate_segment_token_count_with_extra_memory(
+                    core,
+                    runtime,
+                    session.store,
+                    *last_segment,
+                    memory.text,
+                    candidate_existing_tokens,
+                    error)) {
                 return false;
             }
-            candidate_existing_tokens = last_segment->estimated_tokens + delta_tokens;
             if (candidate_existing_tokens > soft_limit) {
                 need_new_segment = true;
                 auto_start = true;
@@ -210,6 +222,11 @@ static bool restore_segment_plan_from_cache_manifest(
     candidate.config.split_ratio = (float) kSegmentSoftLimitPercent / 100.0f;
     candidate.config.max_segments = kMaxSegmentsPerSession;
 
+    const int32_t soft_limit = segment_soft_limit(core, runtime);
+    if (soft_limit <= 0) {
+        return true;
+    }
+
     const std::set<persistent::MemoryIndex> manual_boundaries(
         session.store.manual_segment_boundaries.begin(),
         session.store.manual_segment_boundaries.end());
@@ -229,6 +246,9 @@ static bool restore_segment_plan_from_cache_manifest(
         segment.manual_start =
             manual_boundaries.find(manifest_segment.first_memory_idx) != manual_boundaries.end();
         segment.auto_split_start = !candidate.segments.empty() && !segment.manual_start;
+        if (segment.exact_tokens > soft_limit) {
+            return true;
+        }
 
         for (persistent::MemoryIndex memory_idx = manifest_segment.first_memory_idx;
              memory_idx < manifest_segment.last_memory_idx_exclusive;

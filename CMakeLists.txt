@@ -267,6 +267,16 @@ if (ATTEMORY_BUILD_TESTS)
         LIBS attemory_context
         LABELS unit
     )
+    attemory_add_cpp_test(attemory_resident_kv_store_test
+        SOURCES tests/resident_kv_store_test.cpp
+        LIBS attemory_context
+        LABELS unit
+    )
+    attemory_add_cpp_test(attemory_session_status_test
+        SOURCES tests/session_status_test.cpp
+        LIBS attemory_context
+        LABELS unit
+    )
     attemory_add_cpp_test(attemory_persistent_session_test
         SOURCES tests/persistent_session_test.cpp
         LIBS attemory_persistent

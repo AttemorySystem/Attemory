@@ -136,9 +136,9 @@ class AttemoryMCPService:
             self._ensure_session_loaded(session_id)
             return self._status_response(session_id)
 
-    def create_session(self, session_id: str) -> dict[str, Any]:
+    def create_session(self, session_id: str, kv_persist: bool = False) -> dict[str, Any]:
         with self._lock:
-            usage = self.client.create_session(session_id=session_id)
+            usage = self.client.create_session(session_id=session_id, kv_persist=kv_persist)
             system_usage = None
             if self.system_prompt:
                 system_usage = self.client.add_system(self.system_prompt, session_id=session_id)
@@ -284,9 +284,9 @@ def build_mcp_app(service: AttemoryMCPService) -> Any:
         return _run_tool(service.session_status, session_id)
 
     @mcp.tool()
-    def attemory_create_session(session_id: str) -> dict[str, Any]:
+    def attemory_create_session(session_id: str, kv_persist: bool = False) -> dict[str, Any]:
         """Create a memory session. The MCP server applies its configured system prompt internally."""
-        return _run_tool(service.create_session, session_id)
+        return _run_tool(service.create_session, session_id, kv_persist)
 
     @mcp.tool()
     def attemory_add_memory(session_id: str, text: str, id: str | None = None) -> dict[str, Any]:

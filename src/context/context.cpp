@@ -46,8 +46,10 @@ const persistent::SessionStore * AttemoryContext::session_store(const std::strin
     return impl_->session_manager.session_store(session_id);
 }
 
-CommandResult AttemoryContext::create_session(const std::string & session_id) {
-    return impl_->session_manager.create_session(session_id);
+CommandResult AttemoryContext::create_session(
+    const std::string & session_id,
+    const CreateSessionOptions & options) {
+    return impl_->session_manager.create_session(session_id, options);
 }
 
 CommandResult AttemoryContext::restore_session(const std::string & session_id) {

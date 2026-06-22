@@ -106,6 +106,7 @@ json session_status_json(const SessionStatus & status) {
     body["disk_cached"] = status.disk_cached;
     body["plan_ready"] = status.plan_ready;
     body["facts_dirty"] = status.facts_dirty;
+    body["kv_persist"] = status.kv_persist;
     return body;
 }
 

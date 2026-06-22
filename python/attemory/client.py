@@ -61,8 +61,16 @@ class AttemoryClient:
                 raise AttemoryResponseError(f"session list item {index} is malformed: {exc}") from exc
         return parsed
 
-    def create_session(self, session_id: str | None = None) -> TokenUsage:
-        return self._parse_token_usage(self._session_command("POST", session_id=session_id))
+    def create_session(
+        self,
+        session_id: str | None = None,
+        *,
+        kv_persist: bool = False,
+    ) -> TokenUsage:
+        body = {"kv_persist": True} if kv_persist else None
+        return self._parse_token_usage(
+            self._session_command("POST", json_body=body, session_id=session_id)
+        )
 
     def delete_session(self, session_id: str | None = None) -> dict[str, Any]:
         return self._expect_mapping(self._session_command("DELETE", session_id=session_id))

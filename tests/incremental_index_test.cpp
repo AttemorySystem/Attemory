@@ -98,6 +98,74 @@ void expect_same_results(
     }
 }
 
+attemory::context::SessionStatus session_status(
+    attemory::context::AttemoryContext & context,
+    const std::string & session_id,
+    bool & found) {
+    found = false;
+    for (const attemory::context::SessionStatus & status : context.list_sessions()) {
+        if (status.session_id == session_id) {
+            found = true;
+            return status;
+        }
+    }
+    return {};
+}
+
+void expect_kv_persist_indexes_all_segments(
+    const attemory::context::ContextOptions & base_options,
+    const std::filesystem::path & root) {
+    attemory::context::ContextOptions options = base_options;
+    options.data_dir = (root / "persist-sessions").string();
+    options.cache_dir = (root / "persist-cache").string();
+    options.resident_kv_budget_bytes = 1;
+
+    attemory::context::AttemoryContext context;
+    std::string error;
+    if (!context.init(options, error)) {
+        std::cerr << "kv-persist context init failed: " << error << "\n";
+        EXPECT_TRUE(false);
+        return;
+    }
+
+    attemory::context::CreateSessionOptions create_options;
+    create_options.kv_persist = true;
+    require_ok(context.create_session("persist", create_options), "create kv-persist session");
+    require_ok(
+        context.add_system(
+            "persist",
+            "Read the following memories carefully and find the most relevant memory to the query."),
+        "add kv-persist system");
+    require_ok(context.add_memory("persist", memory("The blue key is inside the ceramic bowl")), "add memory 1");
+    require_ok(context.next_segment("persist"), "seal segment 1");
+    require_ok(context.add_memory("persist", memory("The red key is under the desk")), "add memory 2");
+    require_ok(context.next_segment("persist"), "seal segment 2");
+    require_ok(context.add_memory("persist", memory("The green key is in the garage cabinet")), "add memory 3");
+    require_ok(context.index_session("persist"), "index kv-persist session");
+
+    bool found = false;
+    attemory::context::SessionStatus status = session_status(context, "persist", found);
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(status.kv_persist);
+    EXPECT_EQ(status.segment_count, 3);
+    EXPECT_EQ(status.saved_segments, 3);
+    EXPECT_EQ(status.indexed_segments, 3);
+    EXPECT_TRUE(status.indexed);
+    EXPECT_TRUE(status.disk_cached);
+    EXPECT_TRUE(status.resident_segments < status.segment_count);
+
+    require_ok(context.clear_session("persist"), "clear kv-persist resident cache");
+
+    attemory::context::SearchRequestOverrides overrides;
+    overrides.top_k = 3;
+    const attemory::context::CommandResult search =
+        context.search("persist", "Where is the blue key?", overrides);
+    require_ok(search, "search kv-persist session");
+    EXPECT_TRUE(!search.ordered_search_memories.empty());
+
+    context.shutdown();
+}
+
 } // namespace
 
 int main() {
@@ -147,6 +215,7 @@ int main() {
     expect_same_results(incremental, full);
 
     context.shutdown();
+    expect_kv_persist_indexes_all_segments(options, root);
     std::filesystem::remove_all(root);
     return attemory::test::test_main_result("incremental index test");
 }

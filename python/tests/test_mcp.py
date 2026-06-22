@@ -19,7 +19,8 @@ class FakeClient:
             raise self.restore_error
         return {}
 
-    def create_session(self, *, session_id: str) -> dict[str, Any]:
+    def create_session(self, *, session_id: str, kv_persist: bool = False) -> dict[str, Any]:
+        assert kv_persist is False
         self.calls.append(("create_session", session_id))
         return {}
 

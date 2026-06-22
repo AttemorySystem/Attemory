@@ -72,17 +72,60 @@ bool SegmentSearchRunner::run_cached(
     const bool stream_resident_segments =
         kv_manager_.resident_budget_bytes() == 0 &&
         session_.segment_plan.segments.size() > 1;
+    if (context_.command.run_log) {
+        std::fprintf(
+            stderr,
+            "search-cached begin session=%s segments=%zu context_tokens=%zu query_tokens=%zu "
+            "query_stage_tokens=%zu resident_budget_bytes=%llu stream_resident_segments=%s\n",
+            session_.store.session_id.c_str(),
+            session_.segment_plan.segments.size(),
+            query_stage_tokens_.context_tokens.size(),
+            query_stage_tokens_.query_tokens.size(),
+            query_stage_context_token_count(query_stage_tokens_),
+            (unsigned long long) kv_manager_.resident_budget_bytes(),
+            stream_resident_segments ? "true" : "false");
+        std::fflush(stderr);
+    }
 
     for (const Segment * segment_ptr : sorted_segments_by_id(session_.segment_plan)) {
         const Segment & segment = *segment_ptr;
+        if (context_.command.run_log) {
+            std::fprintf(
+                stderr,
+                "search-segment begin session=%s segment=%d memories=%zu estimated_tokens=%d "
+                "exact_tokens=%d ordered_results_so_far=%zu\n",
+                session_.store.session_id.c_str(),
+                segment.segment_id,
+                segment.memory_indices.size(),
+                segment.estimated_tokens,
+                segment.exact_tokens,
+                ordered_memories.size());
+            std::fflush(stderr);
+        }
         if (!kv_manager_.activate_for_search(
                 session_,
                 context_.command.runtime,
                 segment.segment_id,
                 query_stage_context_token_count(query_stage_tokens_),
+                context_.command.run_log,
                 error)) {
             kv_manager_.clear_active();
             return false;
+        }
+        if (context_.command.run_log) {
+            std::fprintf(
+                stderr,
+                "search-segment activated session=%s segment=%d active_session=%s "
+                "active_segment=%d active_live=%s active_ctx_len=%d\n",
+                session_.store.session_id.c_str(),
+                segment.segment_id,
+                context_.command.kv.active_segment.session_id.c_str(),
+                context_.command.kv.active_segment.segment_id,
+                kv::segment_kv_has_live_context(context_.command.kv.active_segment.handle) ? "true" : "false",
+                kv::segment_kv_has_live_context(context_.command.kv.active_segment.handle)
+                    ? atmcore::active_kv_context_length(context_.command.kv.active_segment.handle->active)
+                    : 0);
+            std::fflush(stderr);
         }
 
         if (context_.command.kv.active_segment.handle == nullptr) {
@@ -90,6 +133,14 @@ bool SegmentSearchRunner::run_cached(
             return false;
         }
 
+        if (context_.command.run_log) {
+            std::fprintf(
+                stderr,
+                "search-segment inference-begin session=%s segment=%d\n",
+                session_.store.session_id.c_str(),
+                segment.segment_id);
+            std::fflush(stderr);
+        }
         const atmcore::RetrievalResult inference = atmcore::run_search_with_query_tokens(
             context_.command.core,
             context_.command.runtime,
@@ -100,11 +151,28 @@ bool SegmentSearchRunner::run_cached(
             kv_manager_.clear_active();
             return false;
         }
+        if (context_.command.run_log) {
+            std::fprintf(
+                stderr,
+                "search-segment inference-done session=%s segment=%d ranked=%zu\n",
+                session_.store.session_id.c_str(),
+                segment.segment_id,
+                inference.ranked_memories.size());
+            std::fflush(stderr);
+        }
 
         kv_manager_.sync_active_search_cache_to_resident();
         merge_segment_ranked_results(session_.store, segment, inference.ranked_memories, ordered_memories);
 
         if (stream_resident_segments) {
+            if (context_.command.run_log) {
+                std::fprintf(
+                    stderr,
+                    "search-segment stream-release session=%s segment=%d\n",
+                    session_.store.session_id.c_str(),
+                    segment.segment_id);
+                std::fflush(stderr);
+            }
             kv_manager_.remove_resident_segment(session_.store.session_id, segment.segment_id);
             demote_removed_resident_metadata(session_, segment.segment_id);
             kv_manager_.clear_active();

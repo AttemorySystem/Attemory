@@ -17,6 +17,8 @@ SessionSummary summarize_session(
             kv_manager.status(*session, segment.segment_id);
         if (kv_status.has_resident_snapshot) {
             ++summary.resident_segments;
+        }
+        if (kv_status.has_resident_snapshot || kv_status.has_disk_snapshot) {
             ++summary.indexed_segments;
         }
         if (kv_status.has_disk_snapshot) {

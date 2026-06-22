@@ -45,13 +45,14 @@ struct MemoryRecord {
 };
 
 struct SessionStore {
-    static constexpr uint32_t kCurrentSchemaVersion = 1;
+    static constexpr uint32_t kCurrentSchemaVersion = 2;
 
     uint32_t schema_version = kCurrentSchemaVersion;
     std::string session_id;
 
     std::string system_text;
     bool system_locked = false;
+    bool kv_persist = false;
 
     MemoryIndex next_memory_idx = 0;
     std::vector<MemoryRecord> memories;

@@ -48,6 +48,7 @@ public:
         const atmcore::RuntimeOptions & runtime,
         attemory::persistent::SegmentId segment_id,
         size_t query_stage_token_count,
+        bool run_log,
         std::string & error);
 
     void clear_active();

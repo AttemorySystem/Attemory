@@ -102,6 +102,7 @@ void test_session_list_body() {
     first.total_tokens = 42;
     first.indexed = true;
     first.plan_ready = true;
+    first.kv_persist = true;
 
     attemory::context::SessionStatus second;
     second.session_id = "b";
@@ -112,8 +113,10 @@ void test_session_list_body() {
     EXPECT_EQ(body["data"]["sessions"][0]["session_id"].get<std::string>(), "a");
     EXPECT_EQ(body["data"]["sessions"][0]["memory_count"].get<int>(), 3);
     EXPECT_TRUE(body["data"]["sessions"][0]["indexed"].get<bool>());
+    EXPECT_TRUE(body["data"]["sessions"][0]["kv_persist"].get<bool>());
     EXPECT_EQ(body["data"]["sessions"][1]["session_id"].get<std::string>(), "b");
     EXPECT_TRUE(body["data"]["sessions"][1]["facts_dirty"].get<bool>());
+    EXPECT_FALSE(body["data"]["sessions"][1]["kv_persist"].get<bool>());
 }
 
 void test_token_usage_response() {

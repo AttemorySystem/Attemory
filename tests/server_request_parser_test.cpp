@@ -109,6 +109,53 @@ void test_text_payload_schema_and_size_errors() {
     EXPECT_EQ(detail_value(error, "max_bytes"), "4194304");
 }
 
+void test_create_session_payload_schema() {
+    attemory::context::CreateSessionOptions options;
+    ErrorInfo error;
+
+    EXPECT_TRUE(attemory::server::parse_create_session_payload(
+        R"({"kv_persist":true})",
+        options,
+        error));
+    EXPECT_TRUE(options.kv_persist);
+
+    EXPECT_TRUE(attemory::server::parse_create_session_payload(
+        R"({"kv-persist":true})",
+        options,
+        error));
+    EXPECT_TRUE(options.kv_persist);
+
+    EXPECT_TRUE(attemory::server::parse_create_session_payload(
+        R"({})",
+        options,
+        error));
+    EXPECT_FALSE(options.kv_persist);
+
+    EXPECT_FALSE(attemory::server::parse_create_session_payload(
+        R"({"kv_persist":"yes"})",
+        options,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "field"), "kv_persist");
+    EXPECT_EQ(detail_value(error, "expected"), "boolean");
+
+    EXPECT_FALSE(attemory::server::parse_create_session_payload(
+        R"({"persistent":true})",
+        options,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "location"), "create-session request");
+    EXPECT_EQ(detail_value(error, "field"), "persistent");
+
+    EXPECT_FALSE(attemory::server::parse_create_session_payload(
+        R"({"kv_persist":true,"kv-persist":false})",
+        options,
+        error));
+    EXPECT_EQ(error.code, ErrorCode::InvalidRequest);
+    EXPECT_EQ(detail_value(error, "field"), "kv_persist");
+    EXPECT_EQ(detail_value(error, "alias"), "kv-persist");
+}
+
 void test_search_payload_schema() {
     attemory::server::SearchRequest parsed;
     ErrorInfo error;
@@ -220,6 +267,7 @@ void test_oneshot_payload_schema() {
 int main() {
     test_memory_payload_schema();
     test_text_payload_schema_and_size_errors();
+    test_create_session_payload_schema();
     test_search_payload_schema();
     test_oneshot_payload_schema();
     return attemory::test::test_main_result("server request parser test");

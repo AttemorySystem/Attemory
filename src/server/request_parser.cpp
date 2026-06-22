@@ -206,6 +206,28 @@ bool read_optional_string_field(
     return true;
 }
 
+bool read_optional_bool_field(
+    const json & body,
+    const std::string & command_name,
+    const char * field,
+    bool & value,
+    ErrorInfo & error) {
+    const auto it = body.find(field);
+    if (it == body.end() || it->is_null()) {
+        return true;
+    }
+    if (!it->is_boolean()) {
+        set_error(
+            error,
+            ErrorCode::InvalidRequest,
+            command_name + " field " + field + " must be a boolean",
+            {{"field", field}, {"expected", "boolean"}});
+        return false;
+    }
+    value = it->get<bool>();
+    return true;
+}
+
 bool read_optional_id_field(
     const json & body,
     const std::string & command_name,
@@ -316,6 +338,34 @@ bool parse_text_payload(
         kMaxTextBytes,
         text,
         error);
+}
+
+bool parse_create_session_payload(
+    const std::string & payload,
+    attemory::context::CreateSessionOptions & options,
+    ErrorInfo & error) {
+    options = {};
+    json body;
+    if (!parse_json_object_payload(payload, "create-session", body, error)) {
+        return false;
+    }
+    if (!reject_unknown_fields(body, "create-session request", {"kv_persist", "kv-persist"}, error)) {
+        return false;
+    }
+    const bool has_snake = body.find("kv_persist") != body.end() && !body["kv_persist"].is_null();
+    const bool has_kebab = body.find("kv-persist") != body.end() && !body["kv-persist"].is_null();
+    if (has_snake && has_kebab) {
+        set_error(
+            error,
+            ErrorCode::InvalidRequest,
+            "create-session request must not set both kv_persist and kv-persist",
+            {{"field", "kv_persist"}, {"alias", "kv-persist"}});
+        return false;
+    }
+    if (!read_optional_bool_field(body, "create-session", "kv_persist", options.kv_persist, error)) {
+        return false;
+    }
+    return read_optional_bool_field(body, "create-session", "kv-persist", options.kv_persist, error);
 }
 
 bool parse_memory_payload(

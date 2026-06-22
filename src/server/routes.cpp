@@ -140,6 +140,29 @@ void handle_empty_command(
     handle_text_command(options, context, command, session_id, std::string(), res);
 }
 
+void handle_create_session(
+    const RouteOptions & options,
+    AttemoryContext & context,
+    const std::string & session_id,
+    const httplib::Request & req,
+    httplib::Response & res) {
+    attemory::context::CreateSessionOptions create_options;
+    if (!req.body.empty()) {
+        ErrorInfo error;
+        if (!validate_json_content_type(req, error)) {
+            set_error_response(res, error);
+            return;
+        }
+        if (!parse_create_session_payload(req.body, create_options, error)) {
+            set_error_response(res, error);
+            return;
+        }
+    }
+
+    const CommandResult result = context.create_session(session_id, create_options);
+    write_command_response(options, context, AttemoryCommand::CREATE_SESSION, session_id, result, res);
+}
+
 bool require_json_content_type(
     const httplib::Request & req,
     httplib::Response & res) {
@@ -283,7 +306,7 @@ void install_routes(
     server.Post(R"(/v1/sessions/([^/]+))", [&, options](const httplib::Request & req, httplib::Response & res) {
         const std::string session_id = req.matches[1].str();
         maybe_log_request(options, req, AttemoryCommand::CREATE_SESSION, session_id);
-        handle_empty_command(options, context, AttemoryCommand::CREATE_SESSION, session_id, req, res);
+        handle_create_session(options, context, session_id, req, res);
     });
     server.Delete(R"(/v1/sessions/([^/]+))", [&, options](const httplib::Request & req, httplib::Response & res) {
         const std::string session_id = req.matches[1].str();

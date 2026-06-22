@@ -937,6 +937,7 @@ void print_usage(const char * program) {
         "  --port PORT, -p PORT             HTTP port, default 9006\n"
         "  --backend BACKEND                Runtime backend, one of %s\n"
         "  --kv-type TYPE                   KV tensor type, default q4_0\n"
+        "  --resident-kv-budget BYTES       RAM budget for resident KV snapshots, not a VRAM cap\n"
         "  --search-candidate-top-k N       Search candidate count\n"
         "  --search-top-k N                 Per-segment search result count\n"
         "  --http-log, --no-http-log        Enable or disable HTTP request logs\n"

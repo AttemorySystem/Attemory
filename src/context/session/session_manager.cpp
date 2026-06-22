@@ -149,22 +149,6 @@ bool append_memory_and_update_plan(
     if (last_segment == nullptr || starts_manual_segment) {
         need_new_segment = true;
         manual_start = starts_manual_segment;
-    } else if (last_segment->estimated_tokens > 0) {
-        std::string memory_segment;
-        if (!last_segment->memory_indices.empty()) {
-            memory_segment += "\n";
-        }
-        memory_segment += memory.text;
-
-        int32_t delta_tokens = 0;
-        if (!estimate_memory_text_tokens(core, memory_segment, delta_tokens, error)) {
-            return false;
-        }
-        candidate_existing_tokens = last_segment->estimated_tokens + delta_tokens;
-        if (candidate_existing_tokens > soft_limit) {
-            need_new_segment = true;
-            auto_start = true;
-        }
     } else {
         if (!estimate_segment_token_count_with_extra_memory(
                 core,
@@ -384,7 +368,9 @@ const persistent::SessionStore * SessionManager::session_store(const std::string
     return session == nullptr ? nullptr : &session->store;
 }
 
-CommandResult SessionManager::create_session(const std::string & session_id) {
+CommandResult SessionManager::create_session(
+    const std::string & session_id,
+    const CreateSessionOptions & options) {
     if (!persistent::is_valid_session_id(session_id)) {
         return make_error(ErrorCode::InvalidSessionId, "invalid session id");
     }
@@ -402,6 +388,7 @@ CommandResult SessionManager::create_session(const std::string & session_id) {
 
     Session session;
     session.store.session_id = session_id;
+    session.store.kv_persist = options.kv_persist;
     const persistent::ResultStatus save_status =
         persistent::save_session_metadata(layout, session.store);
     if (!save_status.ok) {

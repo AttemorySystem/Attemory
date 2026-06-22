@@ -9,36 +9,11 @@
 namespace attemory::context::kv {
 namespace {
 
-bool measure_resident_snapshot_bytes(
-    const SegmentKVHandle & handle,
-    uint64_t & bytes,
-    std::string & error) {
-    bytes = 0;
-    error.clear();
+uint64_t resident_snapshot_ram_bytes(const SegmentKVHandle & handle) {
     if (handle == nullptr) {
-        return true;
+        return 0;
     }
-
-    if (handle->has_snapshot) {
-        bytes = (uint64_t) handle->snapshot.base_seq_state_blob.size();
-    }
-    if (!segment_kv_has_live_context(handle)) {
-        return true;
-    }
-    if (handle->active.state_size_context == nullptr) {
-        return true;
-    }
-
-    uint64_t live_bytes = 0;
-    if (!handle->active.state_size_context(handle->active.ctx, handle->active.base_kv, live_bytes, error)) {
-        return false;
-    }
-    if (live_bytes > std::numeric_limits<uint64_t>::max() - bytes) {
-        error = "resident KV size overflow";
-        return false;
-    }
-    bytes += live_bytes;
-    return true;
+    return handle->has_snapshot ? (uint64_t) handle->snapshot.base_seq_state_blob.size() : 0;
 }
 
 bool release_live_context_to_snapshot(
@@ -388,17 +363,9 @@ bool ResidentKVStore::evict_to_budget(
 }
 
 bool ResidentKVStore::refresh_entry_bytes(ResidentKVEntry & entry, std::string & error) {
-    if (measure_resident_snapshot_bytes(entry.handle, entry.bytes, error)) {
-        return true;
-    }
-    if (budget_bytes_ == 0) {
-        error.clear();
-        entry.bytes = segment_kv_has_snapshot_blob(entry.handle)
-            ? (uint64_t) entry.handle->snapshot.base_seq_state_blob.size()
-            : 0;
-        return true;
-    }
-    return false;
+    error.clear();
+    entry.bytes = resident_snapshot_ram_bytes(entry.handle);
+    return true;
 }
 
 void ResidentKVStore::touch(ResidentKVEntry & entry) {

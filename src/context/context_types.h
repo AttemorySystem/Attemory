@@ -31,6 +31,10 @@ struct SearchInput {
     std::string query;
 };
 
+struct CreateSessionOptions {
+    bool kv_persist = false;
+};
+
 struct ContextOptions {
     std::string model_path;
     std::string model_tier;
@@ -89,6 +93,7 @@ struct SessionStatus {
     bool disk_cached = false;
     bool plan_ready = false;
     bool facts_dirty = false;
+    bool kv_persist = false;
 };
 
 struct MemoryInput {

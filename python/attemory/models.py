@@ -107,6 +107,7 @@ class SessionStatus:
     disk_cached: bool
     plan_ready: bool
     facts_dirty: bool
+    kv_persist: bool = False
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> SessionStatus:
@@ -122,6 +123,7 @@ class SessionStatus:
             disk_cached=_as_bool(data.get("disk_cached")),
             plan_ready=_as_bool(data.get("plan_ready")),
             facts_dirty=_as_bool(data.get("facts_dirty")),
+            kv_persist=_as_bool(data.get("kv_persist")),
         )
 
 

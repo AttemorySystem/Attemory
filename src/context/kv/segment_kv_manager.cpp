@@ -4,12 +4,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <vector>
 
 namespace attemory::context::kv {
 namespace {
 
 void reset_active_segment(ActiveSegmentKV & active) {
+    release_segment_kv_context(active.handle);
     active.handle.reset();
     active.session_id.clear();
     active.segment_id = -1;
@@ -37,6 +39,52 @@ SegmentKVHandle take_incremental_prefix(
     }
     return handle;
 }
+
+atmcore::RuntimeOptions exact_context_runtime(
+    const atmcore::RuntimeOptions & runtime,
+    int32_t required_n_ctx) {
+    atmcore::RuntimeOptions compact = runtime;
+    compact.n_ctx = required_n_ctx;
+    compact.n_ctx_is_ceiling = false;
+    return compact;
+}
+
+atmcore::RuntimeOptions compact_segment_build_runtime(
+    const atmcore::RuntimeOptions & runtime) {
+    atmcore::RuntimeOptions compact = runtime;
+    compact.n_ctx_is_ceiling = compact.n_ctx > 0;
+    return compact;
+}
+
+const char * bool_text(bool value) {
+    return value ? "true" : "false";
+}
+
+int32_t live_context_length(const SegmentKVHandle & handle) {
+    return segment_kv_has_live_context(handle)
+        ? atmcore::active_kv_context_length(handle->active)
+        : 0;
+}
+
+class SnapshotRuntimeOverride {
+public:
+    SnapshotRuntimeOverride(atmcore::KVSnapshot & snapshot, const atmcore::RuntimeOptions & runtime) :
+        snapshot_(snapshot),
+        saved_runtime_(snapshot.metadata.runtime) {
+        snapshot_.metadata.runtime = runtime;
+    }
+
+    SnapshotRuntimeOverride(const SnapshotRuntimeOverride &) = delete;
+    SnapshotRuntimeOverride & operator=(const SnapshotRuntimeOverride &) = delete;
+
+    ~SnapshotRuntimeOverride() {
+        snapshot_.metadata.runtime = saved_runtime_;
+    }
+
+private:
+    atmcore::KVSnapshot & snapshot_;
+    atmcore::RuntimeOptions saved_runtime_;
+};
 
 void clear_incremental_prefix_session(
     ContextKVState & kv,
@@ -268,6 +316,7 @@ bool SegmentKVManager::activate_for_search(
     const atmcore::RuntimeOptions & runtime,
     attemory::persistent::SegmentId segment_id,
     size_t query_stage_token_count,
+    bool run_log,
     std::string & error) {
     error.clear();
 
@@ -294,49 +343,79 @@ bool SegmentKVManager::activate_for_search(
     }
 
     const size_t total_tokens_required = resident_metadata->base_tokens.size() + query_stage_token_count;
-    const int32_t required_n_ctx = std::max(
-        atmcore::required_context_for_token_count(total_tokens_required),
-        resident_metadata->runtime.n_ctx > 0 ? resident_metadata->runtime.n_ctx : 0);
+    const int32_t required_n_ctx =
+        atmcore::required_context_for_token_count(total_tokens_required);
 
     ActiveSegmentKV & active = kv_.active_segment;
+    if (run_log) {
+        std::fprintf(
+            stderr,
+            "search-activate begin session=%s segment=%d base_tokens=%zu query_stage_tokens=%zu "
+            "total_tokens_required=%zu required_n_ctx=%d active_session=%s active_segment=%d "
+            "active_live=%s active_ctx_len=%d resident_live=%s resident_ctx_len=%d "
+            "resident_snapshot=%s resident_blob=%s\n",
+            session.store.session_id.c_str(),
+            segment_id,
+            resident_metadata->base_tokens.size(),
+            query_stage_token_count,
+            total_tokens_required,
+            required_n_ctx,
+            active.session_id.c_str(),
+            active.segment_id,
+            bool_text(segment_kv_has_live_context(active.handle)),
+            live_context_length(active.handle),
+            bool_text(segment_kv_has_live_context(resident)),
+            live_context_length(resident),
+            bool_text(resident->has_snapshot),
+            bool_text(segment_kv_has_snapshot_blob(resident)));
+        std::fflush(stderr);
+    }
     if (active.handle != nullptr &&
         active.session_id == session.store.session_id &&
         active.segment_id == segment_id &&
         atmcore::active_kv_context_length(active.handle->active) >= required_n_ctx) {
-        return true;
-    }
-
-    if (!runtime.use_native_engine &&
-        active.handle != nullptr &&
-        active.session_id == session.store.session_id &&
-        atmcore::active_kv_context_length(active.handle->active) >= required_n_ctx) {
-        if (!segment_kv_has_snapshot_blob(resident)) {
-            if (segment_kv_has_live_context(resident)) {
-                active.handle = resident;
-            } else {
-                return false;
-            }
-        } else if (!atmcore::load_active_kv_from_snapshot(
-                       core_,
-                       runtime,
-                       resident->snapshot,
-                       total_tokens_required,
-                       active.handle->active,
-                       error)) {
-            return false;
+        if (run_log) {
+            std::fprintf(
+                stderr,
+                "search-activate reuse-active-current session=%s segment=%d active_ctx_len=%d\n",
+                session.store.session_id.c_str(),
+                segment_id,
+                live_context_length(active.handle));
+            std::fflush(stderr);
         }
-        active.segment_id = segment_id;
         return true;
     }
 
     if (segment_kv_has_live_context(resident) &&
         atmcore::active_kv_context_length(resident->active) >= required_n_ctx) {
+        if (run_log) {
+            std::fprintf(
+                stderr,
+                "search-activate reuse-resident-live session=%s segment=%d resident_ctx_len=%d\n",
+                session.store.session_id.c_str(),
+                segment_id,
+                live_context_length(resident));
+            std::fflush(stderr);
+        }
         active.handle = resident;
         active.session_id = session.store.session_id;
         active.segment_id = segment_id;
         return true;
     }
 
+    if (run_log && active.handle != nullptr) {
+        std::fprintf(
+            stderr,
+            "search-activate reset-active session=%s segment=%d previous_session=%s "
+            "previous_segment=%d previous_live=%s previous_ctx_len=%d\n",
+            session.store.session_id.c_str(),
+            segment_id,
+            active.session_id.c_str(),
+            active.segment_id,
+            bool_text(segment_kv_has_live_context(active.handle)),
+            live_context_length(active.handle));
+        std::fflush(stderr);
+    }
     reset_active_segment(active);
 
     if (!segment_kv_has_snapshot_blob(resident)) {
@@ -345,6 +424,15 @@ bool SegmentKVManager::activate_for_search(
             return false;
         }
 
+        if (run_log) {
+            std::fprintf(
+                stderr,
+                "search-activate rebuild-ephemeral begin session=%s segment=%d required_n_ctx=%d\n",
+                session.store.session_id.c_str(),
+                segment_id,
+                required_n_ctx);
+            std::fflush(stderr);
+        }
         const std::vector<std::string> memories =
             attemory::context::collect_segment_memory_texts(session.store, *segment);
         atmcore::RuntimeOptions expanded_runtime = runtime;
@@ -360,6 +448,15 @@ bool SegmentKVManager::activate_for_search(
                 error)) {
             return false;
         }
+        if (run_log) {
+            std::fprintf(
+                stderr,
+                "search-activate rebuild-ephemeral done session=%s segment=%d active_ctx_len=%d\n",
+                session.store.session_id.c_str(),
+                segment_id,
+                live_context_length(rebuilt));
+            std::fflush(stderr);
+        }
         if (!kv_.resident.store(session.store.session_id, segment_id, rebuilt, error)) {
             return false;
         }
@@ -373,14 +470,48 @@ bool SegmentKVManager::activate_for_search(
     }
 
     SegmentKVHandle hydrated = make_segment_kv_handle();
+    const atmcore::RuntimeOptions hydrate_runtime =
+        exact_context_runtime(runtime, required_n_ctx);
+    if (run_log) {
+        std::fprintf(
+            stderr,
+            "search-activate hydrate-snapshot begin session=%s segment=%d required_n_ctx=%d "
+            "hydrate_n_ctx=%d snapshot_tokens=%zu snapshot_blob_bytes=%zu\n",
+            session.store.session_id.c_str(),
+            segment_id,
+            required_n_ctx,
+            hydrate_runtime.n_ctx,
+            resident->snapshot.metadata.base_tokens.size(),
+            resident->snapshot.base_seq_state_blob.size());
+        std::fflush(stderr);
+    }
+    SnapshotRuntimeOverride snapshot_runtime(resident->snapshot, hydrate_runtime);
     if (!atmcore::load_active_kv_from_snapshot(
             core_,
-            runtime,
+            hydrate_runtime,
             resident->snapshot,
             total_tokens_required,
             hydrated->active,
             error)) {
+        if (run_log) {
+            std::fprintf(
+                stderr,
+                "search-activate hydrate-snapshot failed session=%s segment=%d error=\"%s\"\n",
+                session.store.session_id.c_str(),
+                segment_id,
+                error.c_str());
+            std::fflush(stderr);
+        }
         return false;
+    }
+    if (run_log) {
+        std::fprintf(
+            stderr,
+            "search-activate hydrate-snapshot done session=%s segment=%d active_ctx_len=%d\n",
+            session.store.session_id.c_str(),
+            segment_id,
+            live_context_length(hydrated));
+        std::fflush(stderr);
     }
 
     active.handle = hydrated;
@@ -452,9 +583,12 @@ bool SegmentKVManager::try_prepare_incremental_resident_segment(
         extended = make_segment_kv_handle();
         extended->snapshot = prefix->snapshot;
         extended->has_snapshot = true;
+        const atmcore::RuntimeOptions hydrate_runtime =
+            exact_context_runtime(runtime, required_n_ctx);
+        SnapshotRuntimeOverride snapshot_runtime(extended->snapshot, hydrate_runtime);
         if (!atmcore::load_active_kv_from_snapshot(
                 core_,
-                runtime,
+                hydrate_runtime,
                 extended->snapshot,
                 static_cast<size_t>(token_count),
                 extended->active,
@@ -538,8 +672,10 @@ bool SegmentKVManager::prepare_resident_segment(
     attemory::persistent::KVCacheEntry * cache =
         attemory::context::find_segment_kv_metadata(session, segment.segment_id);
     if (cache != nullptr &&
-        cache->state == attemory::persistent::CacheState::DiskOnly &&
-        !cache->kv_path.empty()) {
+        !cache->kv_path.empty() &&
+        (cache->state == attemory::persistent::CacheState::DiskOnly ||
+         cache->state == attemory::persistent::CacheState::Resident) &&
+        attemory::persistent::kv_cache_state_exists(*cache)) {
         SegmentKVHandle loaded = make_segment_kv_handle();
         attemory::persistent::KVCacheStateLoadRequest request;
         request.cache = *cache;
@@ -572,10 +708,23 @@ bool SegmentKVManager::prepare_resident_segment(
     if (!keep_only_segment_live(runtime, session.store.session_id, segment.segment_id, error)) {
         return false;
     }
+    const atmcore::RuntimeOptions build_runtime = compact_segment_build_runtime(runtime);
     const bool keep_ephemeral = runtime.use_native_engine;
     const bool built = keep_ephemeral
-        ? atmcore::build_active_kv_ephemeral(core_, runtime, session.store.system_text, memories, rebuilt->active, error)
-        : atmcore::build_active_kv(core_, runtime, session.store.system_text, memories, rebuilt->active, error);
+        ? atmcore::build_active_kv_ephemeral(
+              core_,
+              build_runtime,
+              session.store.system_text,
+              memories,
+              rebuilt->active,
+              error)
+        : atmcore::build_active_kv(
+              core_,
+              build_runtime,
+              session.store.system_text,
+              memories,
+              rebuilt->active,
+              error);
     if (!built) {
         return false;
     }

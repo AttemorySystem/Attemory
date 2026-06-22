@@ -68,6 +68,8 @@ void populate_planned_kv_status(
             kv_manager.status(session, segment.segment_id);
         if (kv_status.has_resident_snapshot) {
             ++status.resident_segments;
+        }
+        if (kv_status.has_resident_snapshot || kv_status.has_disk_snapshot) {
             ++status.indexed_segments;
         }
         if (kv_status.has_disk_snapshot) {
@@ -85,6 +87,7 @@ SessionStatus build_session_status(
     status.session_id = session.store.session_id;
     status.memory_count = (int32_t) session.store.memories.size();
     status.facts_dirty = session.facts_dirty;
+    status.kv_persist = session.store.kv_persist;
     status.plan_ready = session_plan_ready(model_key, session);
 
     persistent::CacheManifest manifest;
@@ -98,8 +101,8 @@ SessionStatus build_session_status(
     } else {
         status.total_tokens = has_manifest ? total_manifest_tokens(manifest) : 0;
         status.resident_segments = kv_manager.resident_segment_count(session.store.session_id);
-        status.indexed_segments = status.resident_segments;
         status.saved_segments = has_manifest ? count_valid_disk_cache_segments(manifest) : 0;
+        status.indexed_segments = std::max(status.resident_segments, status.saved_segments);
     }
     status.indexed = status.segment_count > 0 && status.indexed_segments == status.segment_count;
     status.disk_cached = status.segment_count > 0 && status.saved_segments == status.segment_count;

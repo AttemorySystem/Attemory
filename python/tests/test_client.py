@@ -114,6 +114,29 @@ def test_add_memory_allows_call_level_id_override() -> None:
     }
 
 
+def test_create_session_only_posts_body_for_kv_persist() -> None:
+    token_response = {
+        "data": {
+            "prefill_tokens": 0,
+            "ctx_length": 10,
+            "remaining_tokens": 10,
+            "segment_id": -1,
+            "segment_count": 0,
+        }
+    }
+    transport = FakeTransport([response(200, token_response), response(200, token_response)])
+    client = AttemoryClient(session_id="demo")
+    client._transport = transport
+
+    client.create_session()
+    client.create_session(kv_persist=True)
+
+    assert transport.requests[0]["body"] is None
+    assert "Content-Type" not in transport.requests[0]["headers"]
+    assert json.loads(transport.requests[1]["body"].decode("utf-8")) == {"kv_persist": True}
+    assert transport.requests[1]["headers"]["Content-Type"] == "application/json; charset=utf-8"
+
+
 def test_http_error_preserves_server_error_payload() -> None:
     transport = FakeTransport(
         [

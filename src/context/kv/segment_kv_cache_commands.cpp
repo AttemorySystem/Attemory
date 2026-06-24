@@ -99,6 +99,17 @@ bool persist_segment_kv_snapshot(
     return true;
 }
 
+bool save_progress_manifest(
+    const persistent::CacheLayout & layout,
+    const persistent::CacheManifest & manifest,
+    CommandResult & result) {
+    if (!result_to_bool(persistent::save_kv_cache_manifest(layout, manifest), result.error)) {
+        result.error_info = make_error_info(ErrorCode::InternalError, result.error);
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 static RuntimeOptions compact_cache_build_runtime(const RuntimeOptions & runtime) {
@@ -165,6 +176,9 @@ static bool persist_session_segments_to_disk(
                 result.error_info = make_error_info(ErrorCode::InternalError, result.error);
                 return false;
             }
+            if (!save_progress_manifest(layout, manifest, result)) {
+                return false;
+            }
             continue;
         }
 
@@ -173,6 +187,7 @@ static bool persist_session_segments_to_disk(
                 session,
                 runtime,
                 segment.segment_id,
+                kv::SegmentKVPrepareMode::AllowBuild,
                 resident,
                 result.error)) {
             result.error_info = make_error_info(ErrorCode::InternalError, result.error);
@@ -183,22 +198,28 @@ static bool persist_session_segments_to_disk(
         segment.exact_tokens = (int32_t) kv::segment_kv_base_token_count(resident);
         segment.estimated_tokens = segment.exact_tokens;
 
-        if (!persist_segment_kv_snapshot(
-                session,
-                context.command.model_key,
-                layout,
-                segment,
-                resident,
-                manifest,
-                result.error)) {
-            result.error_info = make_error_info(ErrorCode::InternalError, result.error);
+        if (manager.status(session, segment.segment_id).has_disk_snapshot) {
+            if (!append_existing_disk_manifest_entry(session, segment, manifest, result.error)) {
+                result.error_info = make_error_info(ErrorCode::InternalError, result.error);
+                return false;
+            }
+        } else {
+            if (!persist_segment_kv_snapshot(
+                    session,
+                    context.command.model_key,
+                    layout,
+                    segment,
+                    resident,
+                    manifest,
+                    result.error)) {
+                result.error_info = make_error_info(ErrorCode::InternalError, result.error);
+                return false;
+            }
+        }
+
+        if (!save_progress_manifest(layout, manifest, result)) {
             return false;
         }
-    }
-
-    if (!result_to_bool(persistent::save_kv_cache_manifest(layout, manifest), result.error)) {
-        result.error_info = make_error_info(ErrorCode::InternalError, result.error);
-        return false;
     }
     return true;
 }
@@ -243,6 +264,7 @@ CommandResult kv::SegmentKVManager::index_session_kv_cache(
                 session,
                 compact_runtime,
                 segment.segment_id,
+                kv::SegmentKVPrepareMode::AllowBuild,
                 resident,
                 result.error)) {
             return result;
@@ -289,11 +311,12 @@ CommandResult kv::SegmentKVManager::save_session_kv_cache(
             "session has no memory segments");
     }
 
+    const RuntimeOptions compact_runtime = compact_cache_build_runtime(context.command.runtime);
+    if (!persist_session_segments_to_disk(*this, context, session, compact_runtime, result)) {
+        return result;
+    }
+
     if (!session.store.kv_persist) {
-        const RuntimeOptions compact_runtime = compact_cache_build_runtime(context.command.runtime);
-        if (!persist_session_segments_to_disk(*this, context, session, compact_runtime, result)) {
-            return result;
-        }
         session.store.kv_persist = true;
         session.facts_dirty = true;
         if (!scope.persist()) {

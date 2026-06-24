@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,8 @@ struct SessionManager::Impl {
 };
 
 namespace {
+
+inline constexpr int32_t kAppendTokenEstimateSafetyMargin = 4;
 
 void reset_session_derived_state(kv::SegmentKVManager & kv_manager, Session & session) {
     kv_manager.evict_session(session.store.session_id);
@@ -102,12 +105,36 @@ bool estimate_new_segment_token_count(
     return atmcore::estimate_memory_kv_token_count(core, runtime, facts.system_text, memories, token_count, error);
 }
 
+bool estimate_empty_segment_token_count(
+    atmcore::Runtime * core,
+    const RuntimeOptions & runtime,
+    const SessionFacts & facts,
+    int32_t & token_count,
+    std::string & error) {
+    const std::vector<std::string> memories;
+    return atmcore::estimate_memory_kv_token_count(core, runtime, facts.system_text, memories, token_count, error);
+}
+
 bool estimate_memory_text_tokens(
     atmcore::Runtime * core,
     const std::string & text,
     int32_t & token_count,
     std::string & error) {
     return atmcore::estimate_text_token_count_fast(core, text, false, token_count, error);
+}
+
+int32_t append_token_estimate(
+    int32_t current_segment_tokens,
+    int32_t empty_segment_tokens,
+    int32_t single_memory_segment_tokens) {
+    const int64_t memory_delta =
+        std::max<int32_t>(1, single_memory_segment_tokens - empty_segment_tokens) +
+        kAppendTokenEstimateSafetyMargin;
+    const int64_t total =
+        static_cast<int64_t>(current_segment_tokens) + memory_delta;
+    return total > std::numeric_limits<int32_t>::max()
+        ? std::numeric_limits<int32_t>::max()
+        : static_cast<int32_t>(total);
 }
 
 bool append_memory_and_update_plan(
@@ -146,46 +173,61 @@ bool append_memory_and_update_plan(
             session.store.manual_segment_boundaries.end(),
             session.store.next_memory_idx) != session.store.manual_segment_boundaries.end();
 
+    int32_t new_segment_tokens = 0;
+    if (!estimate_new_segment_token_count(
+            core,
+            runtime,
+            session.store,
+            memory.text,
+            new_segment_tokens,
+            error)) {
+        return false;
+    }
+
+    if (new_segment_tokens > soft_limit) {
+        error = "memory is too large for a fresh segment";
+        return false;
+    }
+
+    bool candidate_is_exact = false;
     if (last_segment == nullptr || starts_manual_segment) {
         need_new_segment = true;
         manual_start = starts_manual_segment;
     } else {
-        if (!estimate_segment_token_count_with_extra_memory(
-                core,
-                runtime,
-                session.store,
-                *last_segment,
-                memory.text,
-                candidate_existing_tokens,
-                error)) {
+        int32_t empty_segment_tokens = 0;
+        if (!estimate_empty_segment_token_count(
+                core, runtime, session.store, empty_segment_tokens, error)) {
             return false;
         }
 
+        candidate_existing_tokens =
+            append_token_estimate(
+                last_segment->estimated_tokens,
+                empty_segment_tokens,
+                new_segment_tokens);
+
         if (candidate_existing_tokens > soft_limit) {
-            need_new_segment = true;
-            auto_start = true;
+            if (!estimate_segment_token_count_with_extra_memory(
+                    core,
+                    runtime,
+                    session.store,
+                    *last_segment,
+                    memory.text,
+                    candidate_existing_tokens,
+                    error)) {
+                return false;
+            }
+            candidate_is_exact = true;
+            if (candidate_existing_tokens > soft_limit) {
+                need_new_segment = true;
+                auto_start = true;
+            }
         }
     }
 
     if (need_new_segment) {
         if ((int32_t) session.segment_plan.segments.size() >= kMaxSegmentsPerSession) {
             error = "segment limit exceeded";
-            return false;
-        }
-
-        int32_t new_segment_tokens = 0;
-        if (!estimate_new_segment_token_count(
-                core,
-                runtime,
-                session.store,
-                memory.text,
-                new_segment_tokens,
-                error)) {
-            return false;
-        }
-
-        if (new_segment_tokens > soft_limit) {
-            error = "memory is too large for a fresh segment";
             return false;
         }
 
@@ -240,7 +282,7 @@ bool append_memory_and_update_plan(
     session.store.system_locked = true;
     last_segment->memory_indices.push_back(session.store.memories.back().memory_idx);
     last_segment->estimated_tokens = candidate_existing_tokens;
-    last_segment->exact_tokens = candidate_existing_tokens;
+    last_segment->exact_tokens = candidate_is_exact ? candidate_existing_tokens : 0;
     mark_segment_kv_missing(cache_dir, model_key, session, *last_segment);
 
     token_count = candidate_existing_tokens;
@@ -402,6 +444,7 @@ CommandResult SessionManager::create_session(
         impl_->state.cache_dir,
         impl_->state.model_cache_key,
         session,
+        impl_->state.options.run_log,
         result.error);
     impl_->state.sessions.emplace(session.store.session_id, std::move(session));
 

@@ -14,6 +14,11 @@ struct KVCacheCommandContext;
 
 namespace attemory::context::kv {
 
+enum class SegmentKVPrepareMode {
+    RequireExisting,
+    AllowBuild,
+};
+
 struct SegmentKVStatus {
     attemory::persistent::SegmentId segment_id = attemory::persistent::kInvalidSegmentId;
     bool has_disk_snapshot = false;
@@ -40,6 +45,7 @@ public:
         attemory::context::Session & session,
         const atmcore::RuntimeOptions & runtime,
         attemory::persistent::SegmentId segment_id,
+        SegmentKVPrepareMode mode,
         SegmentKVHandle & resident,
         std::string & error);
 
@@ -78,6 +84,7 @@ private:
         attemory::context::Session & session,
         const atmcore::RuntimeOptions & runtime,
         const attemory::context::Segment & segment,
+        SegmentKVPrepareMode mode,
         SegmentKVHandle & resident,
         std::string & error);
     bool try_prepare_incremental_resident_segment(

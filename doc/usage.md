@@ -28,7 +28,7 @@ the memories most relevant to a query.
 | Index | The step that builds searchable KV state for a session or segment. Search is fast only after indexing. For `kv_persist` sessions, indexing also writes segment KV cache state to disk. |
 | Search | Retrieval over an indexed session. If the session has multiple segments, it returns per-segment ranked memories. |
 | One-shot search | Retrieval over a supplied memory list without creating or saving a persistent session. It is useful when the candidate set is temporary. |
-| Save session | Persist a default session's indexed reusable cache state to disk and mark it as `kv_persist`. For an existing `kv_persist` session, segment KV persistence happens during indexing. |
+| Save session | Persist searchable segment KV state to disk and mark the session as `kv_persist`. |
 | Restore session | Load a previously saved session back into the running server before searching or updating it. |
 
 A typical persistent workflow is:
@@ -213,7 +213,7 @@ processes when workloads need isolation.
 | `--cache-dir DIR` | KV cache directory. |
 | `--model PATH` or `-m PATH` | Use an already downloaded local GGUF model file instead of resolving and downloading a built-in tier model. Only Q8_0 GGUF models are currently tested. |
 | `--kv-type TYPE` | Override both KV tensor types. Default is `q4_0`. |
-| `--resident-kv-budget SIZE` | RAM budget for Attemory-managed resident KV snapshots, for example `4g`. This is not a GPU VRAM cap; GPU live active KV and CUDA work buffers are managed separately. |
+| `--resident-kv-budget SIZE` | RAM budget for Attemory-managed resident KV snapshots, for example `4g`. `0` means unlimited resident snapshot RAM. |
 | `--search-top-k N` | Default number of results returned from each segment. |
 | `--search-candidate-top-k N` | Used inside attention search ranking. |
 | `--http-log`, `--no-http-log` | Enable or disable HTTP request logs. Disabled by default. |
@@ -267,6 +267,8 @@ search. By default, `index_session()` builds resident KV cache in memory;
 `kv_persist`. If the session is created with `kv_persist=True`,
 `index_session()` writes segment KV cache state to disk while it indexes, which
 is useful for multi-segment sessions or constrained resident RAM budgets.
+If indexing or saving is interrupted, run `index_session()` or `save_session()`
+again before searching.
 
 ```python
 from attemory import AttemoryClient, MemoryInput
@@ -327,7 +329,7 @@ Core methods:
 | `add_memory(memory, session_id=None, id=None)` | Add one memory string, mapping, or `MemoryInput`. |
 | `next_segment(session_id=None)` | Seal the current segment and start a new one. |
 | `index_session(session_id=None)` | Build searchable KV state for the session. For `kv_persist` sessions, also persist segment KV cache state. |
-| `save_session(session_id=None)` | Persist a default session's indexed KV cache state and mark it as `kv_persist`; for an existing `kv_persist` session, persist dirty session metadata and return the current save summary. |
+| `save_session(session_id=None)` | Persist searchable segment KV cache state and mark the session as `kv_persist`. |
 | `restore_session(session_id=None)` | Load session metadata into the server. |
 | `clear_cache(session_id=None)` | Clear resident KV cache for a loaded session. |
 | `search(query, session_id=None, query_context=None, top_k=None)` | Return ranked memories. |
@@ -711,7 +713,7 @@ CLI commands:
 | `restore [session_id]` | Restore a persisted session. |
 | `clear-cache [session_id]` | Clear resident KV cache. |
 | `index [session_id]` | Build searchable KV state. For `kv_persist` sessions, also persist segment KV cache state. |
-| `save [session_id]` | Persist a default session's indexed KV cache state and mark it as `kv_persist`; for an existing `kv_persist` session, persist dirty session metadata and return the current save summary. |
+| `save [session_id]` | Persist searchable segment KV cache state and mark the session as `kv_persist`. |
 | `next-segment [session_id]` | Seal the current segment. |
 | `add-system [session_id]` | Add a system prompt. |
 | `add-memory [session_id]` | Add memory text with optional `--id`. |

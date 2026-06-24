@@ -23,6 +23,7 @@ bool initialize_session_plan(
     const std::filesystem::path & cache_dir,
     const persistent::ModelCacheKey & model_key,
     Session & session,
+    bool run_log,
     std::string & error);
 
 bool prepare_session_plan(
@@ -31,6 +32,7 @@ bool prepare_session_plan(
     const std::filesystem::path & cache_dir,
     const persistent::ModelCacheKey & model_key,
     Session & session,
+    bool run_log,
     std::string & error);
 
 bool rebuild_segment_plan_fast_for_oneshot(

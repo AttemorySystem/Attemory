@@ -70,7 +70,7 @@ bool SegmentSearchRunner::run_cached(
     error.clear();
 
     const bool stream_resident_segments =
-        kv_manager_.resident_budget_bytes() == 0 &&
+        kv_manager_.resident_budget_bytes() > 0 &&
         session_.segment_plan.segments.size() > 1;
     if (context_.command.run_log) {
         std::fprintf(
@@ -164,7 +164,9 @@ bool SegmentSearchRunner::run_cached(
         kv_manager_.sync_active_search_cache_to_resident();
         merge_segment_ranked_results(session_.store, segment, inference.ranked_memories, ordered_memories);
 
-        if (stream_resident_segments) {
+        const kv::SegmentKVStatus segment_status =
+            kv_manager_.status(session_, segment.segment_id);
+        if (stream_resident_segments && segment_status.has_disk_snapshot) {
             if (context_.command.run_log) {
                 std::fprintf(
                     stderr,

@@ -198,6 +198,7 @@ bool SegmentKVManager::prepare_resident_segment(
     attemory::context::Session & session,
     const atmcore::RuntimeOptions & runtime,
     attemory::persistent::SegmentId segment_id,
+    SegmentKVPrepareMode mode,
     SegmentKVHandle & resident,
     std::string & error) {
     error.clear();
@@ -209,7 +210,7 @@ bool SegmentKVManager::prepare_resident_segment(
         return false;
     }
 
-    return prepare_resident_segment(session, runtime, *segment, resident, error);
+    return prepare_resident_segment(session, runtime, *segment, mode, resident, error);
 }
 
 void SegmentKVManager::clear_active() {
@@ -328,7 +329,13 @@ bool SegmentKVManager::activate_for_search(
     }
 
     SegmentKVHandle resident;
-    if (!prepare_resident_segment(session, runtime, *segment, resident, error)) {
+    if (!prepare_resident_segment(
+            session,
+            runtime,
+            *segment,
+            SegmentKVPrepareMode::RequireExisting,
+            resident,
+            error)) {
         return false;
     }
     if (resident == nullptr) {
@@ -638,6 +645,7 @@ bool SegmentKVManager::prepare_resident_segment(
     attemory::context::Session & session,
     const atmcore::RuntimeOptions & runtime,
     const attemory::context::Segment & segment,
+    SegmentKVPrepareMode mode,
     SegmentKVHandle & resident,
     std::string & error) {
     error.clear();
@@ -673,7 +681,8 @@ bool SegmentKVManager::prepare_resident_segment(
         attemory::context::find_segment_kv_metadata(session, segment.segment_id);
     if (cache != nullptr &&
         !cache->kv_path.empty() &&
-        (cache->state == attemory::persistent::CacheState::DiskOnly ||
+        (mode == SegmentKVPrepareMode::AllowBuild ||
+         cache->state == attemory::persistent::CacheState::DiskOnly ||
          cache->state == attemory::persistent::CacheState::Resident) &&
         attemory::persistent::kv_cache_state_exists(*cache)) {
         SegmentKVHandle loaded = make_segment_kv_handle();
@@ -681,10 +690,12 @@ bool SegmentKVManager::prepare_resident_segment(
         request.cache = *cache;
         request.system_text = session.store.system_text;
         request.memories = memories;
+        const atmcore::RuntimeOptions cache_runtime =
+            compact_segment_build_runtime(runtime);
         const attemory::persistent::ResultStatus status =
             attemory::persistent::load_kv_cache_state_snapshot(
                 core_,
-                runtime,
+                cache_runtime,
                 request,
                 loaded->snapshot);
         if (status.ok) {
@@ -701,7 +712,27 @@ bool SegmentKVManager::prepare_resident_segment(
             return true;
         }
         cache->state = attemory::persistent::CacheState::Missing;
+        if (mode == SegmentKVPrepareMode::RequireExisting) {
+            error =
+                "failed to load segment KV disk cache: session=" +
+                session.store.session_id +
+                " segment=" +
+                std::to_string(segment.segment_id) +
+                " reason=" +
+                status.error;
+            return false;
+        }
         error.clear();
+    }
+
+    if (mode == SegmentKVPrepareMode::RequireExisting) {
+        error =
+            "segment KV is not indexed: session=" +
+            session.store.session_id +
+            " segment=" +
+            std::to_string(segment.segment_id) +
+            "; run index or save-session before search";
+        return false;
     }
 
     SegmentKVHandle rebuilt = make_segment_kv_handle();

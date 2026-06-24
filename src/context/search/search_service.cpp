@@ -102,6 +102,21 @@ CommandResult run_search(
         return scope.failure_result();
     }
 
+    for (const Segment & segment : session.segment_plan.segments) {
+        const kv::SegmentKVStatus status =
+            kv_manager.status(session, segment.segment_id);
+        if (status.has_resident_snapshot || status.has_disk_snapshot) {
+            continue;
+        }
+        return make_error(
+            ErrorCode::InvalidRequest,
+            "session is not indexed; run index or save-session before search",
+            {
+                {"session_id", session.store.session_id},
+                {"segment_id", std::to_string(segment.segment_id)},
+            });
+    }
+
     CommandResult result;
     atmcore::SearchQueryTokens query_stage_tokens;
     if (!atmcore::build_query_stage_tokens(

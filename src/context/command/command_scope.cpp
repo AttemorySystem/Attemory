@@ -150,6 +150,7 @@ bool SessionScope::require_planned_session() {
             context_.cache_dir,
             context_.model_key,
             *session_,
+            context_.run_log,
             error_ref())) {
         status_.error_info = make_error_info(ErrorCode::InternalError, status_.error);
         return false;

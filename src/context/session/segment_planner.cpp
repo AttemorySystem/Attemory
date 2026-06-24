@@ -5,6 +5,8 @@
 #include "persistent/persistent.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <limits>
 #include <set>
 #include <utility>
 #include <vector>
@@ -12,6 +14,8 @@
 namespace attemory::context {
 
 namespace {
+
+inline constexpr int32_t kAppendTokenEstimateSafetyMargin = 4;
 
 bool estimate_memory_text_tokens(
     atmcore::Runtime * core,
@@ -64,6 +68,16 @@ static bool estimate_new_segment_token_count(
     return atmcore::estimate_memory_kv_token_count(core, runtime, system, memories, token_count, error);
 }
 
+static bool estimate_empty_segment_token_count(
+    atmcore::Runtime * core,
+    const RuntimeOptions & runtime,
+    const std::string & system,
+    int32_t & token_count,
+    std::string & error) {
+    const std::vector<std::string> memories;
+    return atmcore::estimate_memory_kv_token_count(core, runtime, system, memories, token_count, error);
+}
+
 static bool estimate_segment_token_count_with_extra_memory(
     atmcore::Runtime * core,
     const RuntimeOptions & runtime,
@@ -75,6 +89,35 @@ static bool estimate_segment_token_count_with_extra_memory(
     std::vector<std::string> memories = collect_segment_memory_texts(facts, segment);
     memories.push_back(memory);
     return atmcore::estimate_memory_kv_token_count(core, runtime, facts.system_text, memories, token_count, error);
+}
+
+static int32_t append_token_estimate(
+    int32_t current_segment_tokens,
+    int32_t empty_segment_tokens,
+    int32_t single_memory_segment_tokens) {
+    const int64_t memory_delta =
+        std::max<int32_t>(1, single_memory_segment_tokens - empty_segment_tokens) +
+        kAppendTokenEstimateSafetyMargin;
+    const int64_t total =
+        static_cast<int64_t>(current_segment_tokens) + memory_delta;
+    return total > std::numeric_limits<int32_t>::max()
+        ? std::numeric_limits<int32_t>::max()
+        : static_cast<int32_t>(total);
+}
+
+static void log_manifest_skip(
+    bool run_log,
+    const Session & session,
+    const std::string & reason) {
+    if (!run_log) {
+        return;
+    }
+    std::fprintf(
+        stderr,
+        "restore-cache-manifest skipped session=%s reason=\"%s\"\n",
+        session.store.session_id.c_str(),
+        reason.c_str());
+    std::fflush(stderr);
 }
 
 static bool rebuild_segment_plan_fast(
@@ -100,6 +143,12 @@ static bool rebuild_segment_plan_fast(
         return false;
     }
 
+    int32_t empty_segment_tokens = 0;
+    if (!estimate_empty_segment_token_count(
+            core, runtime, session.store.system_text, empty_segment_tokens, error)) {
+        return false;
+    }
+
     const std::set<persistent::MemoryIndex> manual_boundaries(
         session.store.manual_segment_boundaries.begin(),
         session.store.manual_segment_boundaries.end());
@@ -119,42 +168,51 @@ static bool rebuild_segment_plan_fast(
         bool need_new_segment = last_segment == nullptr || manual_start;
         bool auto_start = false;
         int32_t candidate_existing_tokens = -1;
+        bool candidate_is_exact = false;
+
+        int32_t new_segment_tokens = 0;
+        if (!estimate_new_segment_token_count(
+                core,
+                runtime,
+                session.store.system_text,
+                memory.text,
+                new_segment_tokens,
+                error)) {
+            return false;
+        }
+        if (new_segment_tokens > fresh_segment_token_limit) {
+            error = "memory is too large for a fresh segment";
+            return false;
+        }
 
         if (!need_new_segment && last_segment != nullptr) {
-            if (!estimate_segment_token_count_with_extra_memory(
-                    core,
-                    runtime,
-                    session.store,
-                    *last_segment,
-                    memory.text,
-                    candidate_existing_tokens,
-                    error)) {
-                return false;
-            }
+            candidate_existing_tokens =
+                append_token_estimate(
+                    last_segment->estimated_tokens,
+                    empty_segment_tokens,
+                    new_segment_tokens);
             if (candidate_existing_tokens > soft_limit) {
-                need_new_segment = true;
-                auto_start = true;
+                if (!estimate_segment_token_count_with_extra_memory(
+                        core,
+                        runtime,
+                        session.store,
+                        *last_segment,
+                        memory.text,
+                        candidate_existing_tokens,
+                        error)) {
+                    return false;
+                }
+                candidate_is_exact = true;
+                if (candidate_existing_tokens > soft_limit) {
+                    need_new_segment = true;
+                    auto_start = true;
+                }
             }
         }
 
         if (need_new_segment) {
             if ((int32_t) session.segment_plan.segments.size() >= kMaxSegmentsPerSession) {
                 error = "segment limit exceeded";
-                return false;
-            }
-
-            int32_t new_segment_tokens = 0;
-            if (!estimate_new_segment_token_count(
-                    core,
-                    runtime,
-                    session.store.system_text,
-                    memory.text,
-                    new_segment_tokens,
-                    error)) {
-                return false;
-            }
-            if (new_segment_tokens > fresh_segment_token_limit) {
-                error = "memory is too large for a fresh segment";
                 return false;
             }
 
@@ -168,7 +226,7 @@ static bool rebuild_segment_plan_fast(
             last_segment = &session.segment_plan.segments.back();
         } else {
             last_segment->estimated_tokens = candidate_existing_tokens;
-            last_segment->exact_tokens = candidate_existing_tokens;
+            last_segment->exact_tokens = candidate_is_exact ? candidate_existing_tokens : 0;
         }
 
         last_segment->memory_indices.push_back(memory.memory_idx);
@@ -184,6 +242,7 @@ static bool restore_segment_plan_from_cache_manifest(
     const persistent::ModelCacheKey & model_key,
     Session & session,
     bool & restored_from_manifest,
+    bool run_log,
     std::string & error) {
     restored_from_manifest = false;
     error.clear();
@@ -199,11 +258,19 @@ static bool restore_segment_plan_from_cache_manifest(
     persistent::CacheManifest manifest;
     const persistent::ResultStatus status = persistent::load_kv_cache_manifest(layout, manifest);
     if (!status.ok) {
+        log_manifest_skip(run_log, session, status.error);
         return true;
     }
-    if (!persistent::model_cache_key_equal(manifest.model, model_key) ||
-        manifest.session_id != session.store.session_id ||
-        manifest.segments.empty()) {
+    if (!persistent::model_cache_key_equal(manifest.model, model_key)) {
+        log_manifest_skip(run_log, session, "model cache key mismatch");
+        return true;
+    }
+    if (manifest.session_id != session.store.session_id) {
+        log_manifest_skip(run_log, session, "session id mismatch");
+        return true;
+    }
+    if (manifest.segments.empty()) {
+        log_manifest_skip(run_log, session, "manifest has no segments");
         return true;
     }
 
@@ -224,6 +291,7 @@ static bool restore_segment_plan_from_cache_manifest(
 
     const int32_t soft_limit = segment_soft_limit(core, runtime);
     if (soft_limit <= 0) {
+        log_manifest_skip(run_log, session, "failed to resolve effective context length");
         return true;
     }
 
@@ -236,6 +304,10 @@ static bool restore_segment_plan_from_cache_manifest(
         if (manifest_segment.segment_id < 0 ||
             manifest_segment.first_memory_idx < 0 ||
             manifest_segment.last_memory_idx_exclusive <= manifest_segment.first_memory_idx) {
+            log_manifest_skip(
+                run_log,
+                session,
+                "invalid segment range: segment=" + std::to_string(manifest_segment.segment_id));
             return true;
         }
 
@@ -247,6 +319,10 @@ static bool restore_segment_plan_from_cache_manifest(
             manual_boundaries.find(manifest_segment.first_memory_idx) != manual_boundaries.end();
         segment.auto_split_start = !candidate.segments.empty() && !segment.manual_start;
         if (segment.exact_tokens > soft_limit) {
+            log_manifest_skip(
+                run_log,
+                session,
+                "segment exceeds soft limit: segment=" + std::to_string(segment.segment_id));
             return true;
         }
 
@@ -255,6 +331,10 @@ static bool restore_segment_plan_from_cache_manifest(
              ++memory_idx) {
             if (persistent::find_memory(session.store, memory_idx) == nullptr ||
                 covered.find(memory_idx) != covered.end()) {
+                log_manifest_skip(
+                    run_log,
+                    session,
+                    "segment memory coverage is invalid: segment=" + std::to_string(segment.segment_id));
                 return true;
             }
             segment.memory_indices.push_back(memory_idx);
@@ -262,6 +342,10 @@ static bool restore_segment_plan_from_cache_manifest(
         }
 
         if (segment_kv_content_hash(session.store, segment) != manifest_segment.segment_content_hash) {
+            log_manifest_skip(
+                run_log,
+                session,
+                "segment content hash mismatch: segment=" + std::to_string(segment.segment_id));
             return true;
         }
 
@@ -269,10 +353,21 @@ static bool restore_segment_plan_from_cache_manifest(
     }
 
     if (covered.size() != session.store.memories.size()) {
+        log_manifest_skip(
+            run_log,
+            session,
+            "partial manifest coverage: covered=" +
+                std::to_string(covered.size()) +
+                "/" +
+                std::to_string(session.store.memories.size()));
         return true;
     }
     for (const persistent::MemoryRecord & memory : session.store.memories) {
         if (covered.find(memory.memory_idx) == covered.end()) {
+            log_manifest_skip(
+                run_log,
+                session,
+                "manifest missing memory index: memory_idx=" + std::to_string(memory.memory_idx));
             return true;
         }
     }
@@ -288,6 +383,7 @@ bool initialize_session_plan(
     const std::filesystem::path & cache_dir,
     const persistent::ModelCacheKey & model_key,
     Session & session,
+    bool run_log,
     std::string & error) {
     if (!session.segment_plan.config.model_cache_key.empty() &&
         session.segment_plan.config.model_cache_key != model_key.value) {
@@ -304,6 +400,7 @@ bool initialize_session_plan(
             model_key,
             session,
             restored_from_manifest,
+            run_log,
             error)) {
         return false;
     }
@@ -344,13 +441,14 @@ bool prepare_session_plan(
     const std::filesystem::path & cache_dir,
     const persistent::ModelCacheKey & model_key,
     Session & session,
+    bool run_log,
     std::string & error) {
     if (session_plan_ready(session, model_key)) {
         error.clear();
         return true;
     }
 
-    return initialize_session_plan(core, runtime, cache_dir, model_key, session, error);
+    return initialize_session_plan(core, runtime, cache_dir, model_key, session, run_log, error);
 }
 
 bool rebuild_segment_plan_fast_for_oneshot(

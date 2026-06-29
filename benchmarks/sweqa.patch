@@ -1,0 +1,1952 @@
+diff --git a/Benchmark construction/score/llm-as-a-judge.py b/Benchmark construction/score/llm-as-a-judge.py
+index d9c50f2..cbddcde 100644
+--- a/Benchmark construction/score/llm-as-a-judge.py	
++++ b/Benchmark construction/score/llm-as-a-judge.py	
+@@ -17,16 +17,24 @@ import threading
+ from typing import Dict, Any, Optional, List
+ from pathlib import Path
+ 
+-from openai import AzureOpenAI
++from openai import AzureOpenAI, OpenAI
+ from dotenv import load_dotenv
+ 
+ load_dotenv()
+ 
+-def get_eval_client() -> AzureOpenAI:
++def get_eval_client() -> Any:
+     """Get evaluation client from environment variables"""
+     base_url = os.getenv("EVAL_LLM_BASE_URL")
+     api_version = os.getenv("EVAL_LLM_API_VERSION")
+     api_key = os.getenv("EVAL_LLM_API_KEY")
++
++    if is_openrouter_config():
++        if not all([base_url, api_key]):
++            raise ValueError("Missing required environment variables: EVAL_LLM_BASE_URL, EVAL_LLM_API_KEY")
++        return OpenAI(
++            base_url=base_url,
++            api_key=api_key,
++        )
+     
+     if not all([base_url, api_version, api_key]):
+         raise ValueError("Missing required environment variables: EVAL_LLM_BASE_URL, EVAL_LLM_API_VERSION, EVAL_LLM_API_KEY")
+@@ -39,6 +47,13 @@ def get_eval_client() -> AzureOpenAI:
+     )
+ 
+ 
++def is_openrouter_config() -> bool:
++    """Whether the judge should use an OpenAI-compatible OpenRouter client."""
++    provider = os.getenv("EVAL_LLM_PROVIDER", "").lower()
++    base_url = os.getenv("EVAL_LLM_BASE_URL", "")
++    return provider == "openrouter" or "openrouter.ai" in base_url
++
++
+ def get_config_from_env() -> Dict[str, Any]:
+     """Get all configuration from environment variables"""
+     max_workers_str = os.getenv("EVAL_MAX_WORKERS")
+@@ -163,9 +178,9 @@ REQUIREMENT:
+ 
+     try:
+         # Use GPT-5 Responses API for evaluation
+-        response = eval_client.chat.completions.create(
+-            model=model,
+-            messages=[
++        request_kwargs = {
++            "model": model,
++            "messages": [
+                 {
+                     "role": "user",
+                     "content": [
+@@ -176,13 +191,15 @@ REQUIREMENT:
+                     ]
+                 }
+             ],
+-            extra_body={
++        }
++        if not is_openrouter_config():
++            request_kwargs["extra_body"] = {
+                 "thinking": {
+                     "include_thoughts": False,
+                     "budget_tokens": 1024
+                 }
+-            },
+-        )
++            }
++        response = eval_client.chat.completions.create(**request_kwargs)
+         
+         # Extract response text from Responses API format
+         score_str = response.choices[0].message.content.strip()
+diff --git a/attemory/scripts/build_attemory_index.py b/attemory/scripts/build_attemory_index.py
+new file mode 100644
+index 0000000..d99356f
+--- /dev/null
++++ b/attemory/scripts/build_attemory_index.py
+@@ -0,0 +1,80 @@
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from pathlib import Path
++
++from repo_index import build_or_restore_index, make_attemory_client
++
++
++ROOT = Path(__file__).resolve().parents[1]
++WORKSPACE = ROOT.parent
++DEFAULT_BENCH_ROOT = WORKSPACE if (WORKSPACE / "Benchmark").is_dir() else WORKSPACE / "SWE-QA-Bench"
++DEFAULT_REPOS_ROOT = DEFAULT_BENCH_ROOT / "datas" / "repos"
++FALLBACK_REPOS_ROOT = DEFAULT_BENCH_ROOT / "datas"
++DEFAULT_INDEX_ROOT = DEFAULT_BENCH_ROOT / ".attemory-index"
++DEFAULT_REPOS = [
++    "astropy",
++    "conan",
++    "django",
++    "flask",
++    "matplotlib",
++    "pylint",
++    "pytest",
++    "reflex",
++    "requests",
++    "scikit-learn",
++    "sphinx",
++    "sqlfluff",
++    "streamlink",
++    "sympy",
++    "xarray",
++]
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Build or restore Attemory code indexes for SWE-QA repos.")
++    parser.add_argument("--repos-root", default=os.environ.get("REPOS_ROOT"))
++    parser.add_argument("--index-root", default=os.environ.get("ATTEMORY_INDEX_ROOT") or str(DEFAULT_INDEX_ROOT))
++    parser.add_argument("--repo", action="append", choices=DEFAULT_REPOS, help="Repository to index. Repeatable.")
++    parser.add_argument("--host", default=os.environ.get("ATTEMORY_HOST", "127.0.0.1"))
++    parser.add_argument("--port", type=int, default=int(os.environ.get("ATTEMORY_PORT", "9006")))
++    parser.add_argument("--timeout", type=float, default=float(os.environ.get("ATTEMORY_TIMEOUT", "3600")))
++    parser.add_argument("--rebuild-index", action="store_true")
++    args = parser.parse_args()
++
++    client = make_attemory_client(host=args.host, port=args.port, timeout=args.timeout)
++    for repo in args.repo or DEFAULT_REPOS:
++        repos_root = Path(args.repos_root).resolve() if args.repos_root else _default_repos_root(repo).resolve()
++        result = build_or_restore_index(
++            client=client,
++            repo_name=repo,
++            repo_root=repos_root / repo,
++            index_root=args.index_root,
++            rebuild=args.rebuild_index,
++        )
++        print(
++            json.dumps(
++                {
++                    "repo": repo,
++                    "session_id": result.session_id,
++                    "reused": result.reused,
++                    "memory_count": result.memory_count,
++                    "index_ms": result.index_ms,
++                },
++                ensure_ascii=False,
++            )
++        )
++
++
++def _default_repos_root(repo_name: str) -> Path:
++    if (DEFAULT_REPOS_ROOT / repo_name).exists():
++        return DEFAULT_REPOS_ROOT
++    if (FALLBACK_REPOS_ROOT / repo_name).exists():
++        return FALLBACK_REPOS_ROOT
++    return DEFAULT_REPOS_ROOT
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/attemory/scripts/claude_stream.py b/attemory/scripts/claude_stream.py
+new file mode 100644
+index 0000000..943bd9b
+--- /dev/null
++++ b/attemory/scripts/claude_stream.py
+@@ -0,0 +1,290 @@
++from __future__ import annotations
++
++import json
++import re
++from collections import Counter
++from typing import Any
++
++
++TOKEN_KEYS = {
++    "input_tokens",
++    "output_tokens",
++    "cache_creation_input_tokens",
++    "cache_read_input_tokens",
++    "prompt_tokens",
++    "completion_tokens",
++    "total_tokens",
++}
++
++
++def parse_stream_json(text: str) -> list[dict[str, Any]]:
++    events: list[dict[str, Any]] = []
++    for line in text.splitlines():
++        stripped = line.strip()
++        if not stripped:
++            continue
++        try:
++            event = json.loads(stripped)
++        except json.JSONDecodeError:
++            continue
++        if isinstance(event, dict):
++            events.append(event)
++    return events
++
++
++def extract_submission(events: list[dict[str, Any]], stdout: str) -> str:
++    final_answer = _latest_final_answer(events, stdout)
++    if final_answer:
++        return final_answer
++    result_text = _latest_result_text(events)
++    if result_text:
++        return _extract_final_answer(result_text)
++    assistant_texts = list(_assistant_texts(events))
++    if assistant_texts:
++        return _extract_final_answer(assistant_texts[-1])
++    return _extract_final_answer(stdout)
++
++
++def diagnose_submission(events: list[dict[str, Any]], stdout: str, submission: str) -> dict[str, Any]:
++    has_final_answer = bool(_latest_final_answer(events, stdout))
++    if has_final_answer or not _looks_like_procedural_submission(submission):
++        return {}
++    return {
++        "issue": "missing_final_answer_meta_output",
++        "severity": "invalid",
++        "submission_len": len(submission or ""),
++        "latest_result": _latest_result_text(events)[:300],
++    }
++
++
++def summarize_usage(events: list[dict[str, Any]]) -> dict[str, Any]:
++    result_usage = None
++    total_cost_usd = None
++    for event in events:
++        if event.get("type") == "result":
++            usage = event.get("usage")
++            if isinstance(usage, dict):
++                result_usage = usage
++            if isinstance(event.get("total_cost_usd"), int | float):
++                total_cost_usd = event["total_cost_usd"]
++    usage = _normalize_usage(result_usage) if result_usage else _sum_nested_usage(events)
++    if total_cost_usd is not None:
++        usage["total_cost_usd"] = total_cost_usd
++    return usage
++
++
++def summarize_tools(events: list[dict[str, Any]]) -> dict[str, Any]:
++    counts: Counter[str] = Counter()
++    bash_commands: list[str] = []
++    for event in events:
++        for block in _walk_content_blocks(event):
++            if block.get("type") != "tool_use":
++                continue
++            name = str(block.get("name") or "")
++            if not name:
++                continue
++            counts[name] += 1
++            if name == "Bash":
++                command = _bash_command(block)
++                if command:
++                    bash_commands.append(command)
++    attemory_calls = [cmd for cmd in bash_commands if _command_invokes(cmd, "attemory-search")]
++    return {
++        "tool_call_count": sum(counts.values()),
++        "tool_counts": dict(sorted(counts.items())),
++        "bash_call_count": counts.get("Bash", 0),
++        "attemory_search_calls": len(attemory_calls),
++        "attemory_search_commands": attemory_calls,
++        "agent_tool_calls": counts.get("Agent", 0) + counts.get("Task", 0),
++    }
++
++
++def _latest_result_text(events: list[dict[str, Any]]) -> str:
++    for event in reversed(events):
++        if event.get("type") == "result":
++            for key in ("result", "text", "content"):
++                value = event.get(key)
++                if isinstance(value, str) and value.strip():
++                    return value
++    return ""
++
++
++def _latest_final_answer(events: list[dict[str, Any]], stdout: str) -> str:
++    candidates: list[tuple[bool, str]] = []
++    for event in events:
++        parent_tool_use_id = event.get("parent_tool_use_id")
++        is_top_level = parent_tool_use_id is None
++        for text in _event_texts(event):
++            final_answer = _extract_tagged_final_answer(text)
++            if final_answer:
++                candidates.append((is_top_level, final_answer))
++    top_level = [text for is_top_level, text in candidates if is_top_level]
++    if top_level:
++        return top_level[-1]
++    if candidates:
++        return candidates[-1][1]
++    return _extract_tagged_final_answer(stdout)
++
++
++def _event_texts(event: dict[str, Any]):
++    if event.get("type") == "result":
++        for key in ("result", "text", "content"):
++            value = event.get(key)
++            if isinstance(value, str) and value.strip():
++                yield value
++    message = event.get("message")
++    if not isinstance(message, dict) or message.get("role") != "assistant":
++        return
++    content = message.get("content")
++    if isinstance(content, str):
++        yield content
++    elif isinstance(content, list):
++        texts = [
++            item.get("text")
++            for item in content
++            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
++        ]
++        if texts:
++            yield "\n".join(texts)
++
++
++def _assistant_texts(events: list[dict[str, Any]]):
++    for event in events:
++        message = event.get("message")
++        if not isinstance(message, dict):
++            continue
++        if message.get("role") != "assistant":
++            continue
++        texts = []
++        content = message.get("content")
++        if isinstance(content, str):
++            texts.append(content)
++        elif isinstance(content, list):
++            for item in content:
++                if isinstance(item, dict) and item.get("type") == "text":
++                    text = item.get("text")
++                    if isinstance(text, str):
++                        texts.append(text)
++        if texts:
++            yield "\n".join(texts)
++
++
++def _extract_final_answer(text: str) -> str:
++    tagged = _extract_tagged_final_answer(text)
++    if tagged:
++        return tagged
++    return text.strip()
++
++
++def _extract_tagged_final_answer(text: str) -> str:
++    match = re.search(r"<final_answer>(.*?)</final_answer>", text, flags=re.DOTALL | re.IGNORECASE)
++    if match:
++        return match.group(1).strip()
++    return ""
++
++
++def _looks_like_procedural_submission(text: str) -> bool:
++    normalized = " ".join((text or "").strip().lower().split())
++    if not normalized:
++        return True
++    if len(normalized) > 800:
++        return False
++    prefixes = (
++        "now let me",
++        "now i have",
++        "let me ",
++        "i need to ",
++        "i should ",
++        "i will ",
++        "i'll ",
++        "the background agent",
++        "the agent is ",
++        "i have all the evidence",
++    )
++    substrings = (
++        "compose the final answer",
++        "formulate the final answer",
++        "write the final answer",
++        "look at the ",
++        "completed and confirms the analysis",
++        "final answer i provided above",
++    )
++    return normalized.startswith(prefixes) or any(item in normalized for item in substrings)
++
++
++def _sum_nested_usage(events: list[dict[str, Any]]) -> dict[str, int]:
++    total: dict[str, int] = {}
++    for event in events:
++        for usage in _walk_usage_dicts(event):
++            normalized = _normalize_usage(usage)
++            for key, value in normalized.items():
++                if isinstance(value, int):
++                    total[key] = total.get(key, 0) + value
++    total["total_reported_tokens"] = _reported_total(total)
++    return total
++
++
++def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
++    normalized: dict[str, Any] = {}
++    for key, value in usage.items():
++        if key in TOKEN_KEYS and isinstance(value, int | float):
++            normalized[key] = int(value)
++    if "input_tokens" not in normalized and "prompt_tokens" in normalized:
++        normalized["input_tokens"] = normalized["prompt_tokens"]
++    if "output_tokens" not in normalized and "completion_tokens" in normalized:
++        normalized["output_tokens"] = normalized["completion_tokens"]
++    normalized["total_reported_tokens"] = _reported_total(normalized)
++    return normalized
++
++
++def _reported_total(usage: dict[str, Any]) -> int:
++    if isinstance(usage.get("total_tokens"), int):
++        return int(usage["total_tokens"])
++    return sum(
++        int(usage.get(key, 0) or 0)
++        for key in (
++            "input_tokens",
++            "output_tokens",
++            "cache_creation_input_tokens",
++            "cache_read_input_tokens",
++        )
++    )
++
++
++def _walk_usage_dicts(value: Any):
++    if isinstance(value, dict):
++        usage = value.get("usage")
++        if isinstance(usage, dict):
++            yield usage
++        for item in value.values():
++            yield from _walk_usage_dicts(item)
++    elif isinstance(value, list):
++        for item in value:
++            yield from _walk_usage_dicts(item)
++
++
++def _walk_content_blocks(value: Any):
++    if isinstance(value, dict):
++        content = value.get("content")
++        if isinstance(content, list):
++            for item in content:
++                if isinstance(item, dict):
++                    yield item
++        for item in value.values():
++            yield from _walk_content_blocks(item)
++    elif isinstance(value, list):
++        for item in value:
++            yield from _walk_content_blocks(item)
++
++
++def _bash_command(block: dict[str, Any]) -> str:
++    tool_input = block.get("input")
++    if isinstance(tool_input, dict):
++        command = tool_input.get("command")
++        if isinstance(command, str):
++            return command
++    return ""
++
++
++def _command_invokes(command: str, executable: str) -> bool:
++    return re.search(rf"(^|[;&|()\s]){re.escape(executable)}(\s|$)", command) is not None
+diff --git a/attemory/scripts/judge.py b/attemory/scripts/judge.py
+new file mode 100644
+index 0000000..6f3190b
+--- /dev/null
++++ b/attemory/scripts/judge.py
+@@ -0,0 +1,128 @@
++import argparse
++import json
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++BENCH_ROOT = ROOT.parent
++JUDGE_SCRIPT = BENCH_ROOT / "Benchmark construction" / "score" / "llm-as-a-judge.py"
++
++
++def main():
++    parser = argparse.ArgumentParser(description="Run the official SWE-QA judge for default and Attemory outputs.")
++    parser.add_argument("repo", help="Repo name, for example requests or scikit-learn")
++    parser.add_argument("--workers", default=os.environ.get("EVAL_MAX_WORKERS", "2"))
++    parser.add_argument("--model", default=os.environ.get("EVAL_LLM_MODEL_NAME", "openai/gpt-5.4"))
++    parser.add_argument("--output-dir", default=str(ROOT / "output"))
++    parser.add_argument("--api-key", default="", help="OpenRouter API key. Prefer env var for normal use.")
++    args = parser.parse_args()
++
++    output_dir = Path(args.output_dir)
++    repo_path_name = args.repo.replace("-", "_")
++    reference = BENCH_ROOT / "Benchmark" / f"{args.repo}.jsonl"
++
++    if not reference.exists():
++        raise SystemExit(f"missing reference file: {reference}")
++    if not JUDGE_SCRIPT.exists():
++        raise SystemExit(f"missing official judge script: {JUDGE_SCRIPT}")
++
++    results = []
++    for backend in ("default", "attemory"):
++        candidate = output_dir / f"{backend}_{repo_path_name}.jsonl"
++        score_path = output_dir / f"{backend}_{repo_path_name}_score.jsonl"
++        if not candidate.exists():
++            raise SystemExit(f"missing candidate file: {candidate}")
++
++        run_judge(
++            candidate=candidate,
++            reference=reference,
++            output=score_path,
++            model=args.model,
++            workers=args.workers,
++            api_key=args.api_key,
++        )
++        results.append((backend, score_path, summarize_scores(score_path)))
++
++    print("\nsummary")
++    print("backend,samples,avg_score,total_score,score_file")
++    for backend, score_path, summary in results:
++        print(
++            f"{backend},"
++            f"{summary['samples']},"
++            f"{summary['avg_score']:.2f},"
++            f"{summary['total_score']},"
++            f"{score_path}"
++        )
++
++
++def run_judge(candidate, reference, output, model, workers, api_key):
++    env = os.environ.copy()
++    env["EVAL_LLM_PROVIDER"] = "openrouter"
++    env["EVAL_LLM_BASE_URL"] = env.get("EVAL_LLM_BASE_URL") or "https://openrouter.ai/api/v1"
++    env["EVAL_LLM_MODEL_NAME"] = model
++    env["EVAL_MAX_WORKERS"] = str(workers)
++    env["EVAL_REFERENCE_PATH"] = str(reference)
++    env["EVAL_CANDIDATE_PATH"] = str(candidate)
++    env["EVAL_OUTPUT_PATH"] = str(output)
++
++    key, source = first_value(
++        (api_key, "--api-key"),
++        (env.get("EVAL_LLM_API_KEY"), "EVAL_LLM_API_KEY"),
++        (env.get("OPENROUTER_API_KEY"), "OPENROUTER_API_KEY"),
++        (env.get("OPENAI_API_KEY"), "OPENAI_API_KEY"),
++    )
++    if not key:
++        raise SystemExit("missing API key: set EVAL_LLM_API_KEY or OPENROUTER_API_KEY")
++    if key.startswith("<") or key.endswith(">"):
++        raise SystemExit("API key still looks like a placeholder; set a real OpenRouter key")
++    env["EVAL_LLM_API_KEY"] = key
++    env["OPENAI_API_KEY"] = key
++
++    print(f"\n=== judge {candidate.name} ===", flush=True)
++    print(
++        f"judge auth: {source} -> EVAL_LLM_API_KEY={redact_key(key)} "
++        f"base_url={env['EVAL_LLM_BASE_URL']} model={env['EVAL_LLM_MODEL_NAME']}",
++        flush=True,
++    )
++    subprocess.run([sys.executable, str(JUDGE_SCRIPT)], cwd=BENCH_ROOT, env=env, check=True)
++
++
++def first_value(*pairs):
++    for value, source in pairs:
++        if value is None:
++            continue
++        value = str(value).strip()
++        if value:
++            return value, source
++    return "", ""
++
++
++def redact_key(key):
++    if len(key) <= 8:
++        return "***"
++    return f"{key[:6]}...{key[-4:]}"
++
++
++def summarize_scores(path):
++    samples = 0
++    total_score = 0
++    with path.open(encoding="utf-8") as f:
++        for line in f:
++            if not line.strip():
++                continue
++            record = json.loads(line)
++            score = record.get("score")
++            if not isinstance(score, dict):
++                continue
++            samples += 1
++            total_score += int(record.get("total_score") or sum(int(value) for value in score.values()))
++
++    avg_score = total_score / samples if samples else 0.0
++    return {"samples": samples, "total_score": total_score, "avg_score": avg_score}
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/attemory/scripts/make_readable_prompts.py b/attemory/scripts/make_readable_prompts.py
+new file mode 100644
+index 0000000..359fc6e
+--- /dev/null
++++ b/attemory/scripts/make_readable_prompts.py
+@@ -0,0 +1,428 @@
++from __future__ import annotations
++
++import hashlib
++import json
++import math
++import os
++import time
++from pathlib import Path
++from typing import Any
++
++from repo_index import FILE_HEADER_PREFIX, make_attemory_client, restore_index
++
++
++ROOT = Path(__file__).resolve().parents[1]
++WORKSPACE = ROOT.parent
++DEFAULT_BENCH_ROOT = WORKSPACE if (WORKSPACE / "Benchmark").is_dir() else WORKSPACE / "SWE-QA-Bench"
++DEFAULT_REPOS_ROOT = DEFAULT_BENCH_ROOT / "datas" / "repos"
++FALLBACK_REPOS_ROOT = DEFAULT_BENCH_ROOT / "datas"
++DEFAULT_INDEX_ROOT = DEFAULT_BENCH_ROOT / ".attemory-index"
++QUERY_CONTEXT_PROMPT = (
++    "Read the selected code snippets carefully and answer the user's repository question: {question}. "
++    "Treat the query as code navigation. Rank snippets by how directly they define, declare, implement, "
++    "export, configure, or explain the requested symbol, API, behavior, or feature. Prefer exact identifier "
++    "matches and concrete implementation code over snippets that only mention, call, test, or document it."
++)
++RERANK_SYSTEM_PROMPT = (
++    "Rank the selected code snippets by how directly they answer the repository question. Prefer production "
++    "source and concrete definitions or implementations. Use tests, examples, and docs when they are the "
++    "best evidence for the requested behavior."
++)
++
++
++PROMPT = """You are an expert code analyst answering a repository-level SWE-QA question.
++
++The code repository is at `{repo_root}`. Answer using repository content only; do not use external knowledge.
++
++<question>
++{question}
++</question>
++{semantic_search_block}
++Instructions:
++- Explore the repository as needed using read-only tools.
++- Do not modify files.
++- Answer in English.
++- Cite concrete file paths, functions/classes, and line numbers when they support the answer.
++- When finished, output only:
++<final_answer>
++your answer
++</final_answer>
++"""
++
++
++SEARCH_BLOCK = """
++<semantic_search_results>
++The following files and line ranges are semantic-search candidate evidence from the repository.
++Inspect these locations first. Use them as a shortcut to relevant code, not as a complete answer scope.
++
++If the listed ranges contain the named symbols/classes/functions and enough surrounding code or tests to answer the question, answer from that evidence directly.
++If an important symbol, file, caller, test, exception path, or dataflow mentioned in the question is missing from these results, run a narrow repository search for that missing
++item and read only the smallest surrounding ranges needed.
++
++Do not broaden exploration just because semantic search results are provided; broaden only to fill a concrete evidence gap.
++
++For questions that require checking multiple files, call chains, exception propagation, redirect/auth/cookie/session behavior, lifecycle reasoning, or dataflow across components,
++prefer using a subagent to inspect the listed candidate ranges and any narrowly missing evidence. Ask the subagent to verify whether the evidence covers the components named
++in the question, and to return a concise evidence summary with file paths, functions/classes, line numbers, and any specific unresolved gap.
++
++Do not serially read broad evidence in the main context when a focused subagent can verify the candidate locations and missing links.
++
++{search_text}
++</semantic_search_results>
++"""
++
++def prepare_prompts(
++    *,
++    backend: str,
++    repo: str,
++    run_dir: Path,
++    benchmark_dir: Path | None = None,
++    repos_root: Path | None = None,
++    index_root: Path | None = None,
++    sample_ids: list[str] | None = None,
++) -> None:
++    benchmark_dir = benchmark_dir or Path(os.environ.get("BENCHMARK_DIR") or str(DEFAULT_BENCH_ROOT / "Benchmark"))
++    if repos_root is None:
++        repos_root = Path(os.environ["REPOS_ROOT"]) if os.environ.get("REPOS_ROOT") else _default_repos_root(repo)
++    index_root = index_root or Path(os.environ.get("ATTEMORY_INDEX_ROOT") or str(DEFAULT_INDEX_ROOT))
++
++    repo_root = repos_root / repo
++    benchmark_file = benchmark_dir / f"{repo}.jsonl"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (run_dir / "repo_root.txt").write_text(str(repo_root), encoding="utf-8")
++
++    wanted = set(sample_ids or [])
++    sample_ids: list[str] = []
++    for index, row in enumerate(_read_jsonl(benchmark_file)):
++        question = str(row.get("question") or row.get("problem_statement") or "")
++        reference = str(row.get("answer") or row.get("reference_answer") or "")
++        current_sample_id = str(row.get("id") or row.get("sample_id") or _stable_id(repo, index, question))
++        if wanted and current_sample_id not in wanted:
++            continue
++        sample_ids.append(current_sample_id)
++
++        sample_dir = run_dir / current_sample_id
++        sample_dir.mkdir(parents=True, exist_ok=True)
++        (sample_dir / "sample.json").write_text(
++            json.dumps(
++                {
++                    "sample_id": current_sample_id,
++                    "repo": repo,
++                    "question": question,
++                    "reference_answer": reference,
++                    "raw": row,
++                },
++                ensure_ascii=False,
++            )
++            + "\n",
++            encoding="utf-8",
++        )
++
++        search_text = ""
++        if backend == "attemory":
++            search_text = _search_attemory(
++                question=question,
++                repo=repo,
++                repo_root=repo_root,
++                index_root=index_root,
++                traj=sample_dir / "attemory_search.jsonl",
++            )
++            (sample_dir / "attemory_search.txt").write_text(search_text, encoding="utf-8")
++
++        semantic_block = SEARCH_BLOCK.format(search_text=search_text).rstrip() + "\n" if search_text else ""
++        (sample_dir / "prompt.txt").write_text(
++            PROMPT.format(repo_root=repo_root, question=question, semantic_search_block=semantic_block),
++            encoding="utf-8",
++        )
++
++    missing = sorted(wanted.difference(sample_ids))
++    if missing:
++        raise ValueError(f"sample not found: {', '.join(missing)}")
++    (run_dir / "samples.txt").write_text("\n".join(sample_ids) + "\n", encoding="utf-8")
++
++
++def _read_jsonl(path: Path):
++    with path.open(encoding="utf-8") as f:
++        for line in f:
++            if line.strip():
++                yield json.loads(line)
++
++
++def _stable_id(repo: str, index: int, question: str) -> str:
++    digest = hashlib.sha1(question.encode("utf-8")).hexdigest()[:10]
++    return f"{repo}-{index:03d}-{digest}"
++
++
++def _default_repos_root(repo_name: str) -> Path:
++    if (DEFAULT_REPOS_ROOT / repo_name).exists():
++        return DEFAULT_REPOS_ROOT
++    if (FALLBACK_REPOS_ROOT / repo_name).exists():
++        return FALLBACK_REPOS_ROOT
++    return DEFAULT_REPOS_ROOT
++
++
++def _search_attemory(*, question: str, repo: str, repo_root: Path, index_root: Path, traj: Path) -> str:
++    start = time.perf_counter()
++    client = make_attemory_client(
++        host=os.environ.get("ATTEMORY_HOST", "127.0.0.1"),
++        port=int(os.environ.get("ATTEMORY_PORT", "9006")),
++        timeout=float(os.environ.get("ATTEMORY_TIMEOUT", "3600")),
++    )
++    index = restore_index(client=client, repo_name=repo, repo_root=repo_root, index_root=index_root)
++    search_result = retrieve_hits(
++        client=client,
++        session_id=index.session_id,
++        question=question,
++        memory_map=index.memory_map,
++        top_k=int(os.environ.get("ATTEMORY_SEARCH_TOPK", "8")),
++        chunk_top_k=int(os.environ.get("ATTEMORY_CHUNK_TOPK", "16")),
++    )
++    record: dict[str, Any] = {
++        "ok": True,
++        "query": question,
++        "repo_name": repo,
++        "repo_root": str(repo_root),
++        "top_k": int(os.environ.get("ATTEMORY_SEARCH_TOPK", "8")),
++        "elapsed_ms": (time.perf_counter() - start) * 1000,
++        "index": {
++            "session_id": index.session_id,
++            "reused": index.reused,
++            "index_ms": index.index_ms,
++            "memory_count": index.memory_count,
++        },
++        **search_result,
++    }
++    _write_jsonl(traj, record)
++    return _render_text(record)
++
++
++def _write_jsonl(path: Path, record: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8") as f:
++        f.write(json.dumps(record, ensure_ascii=False) + "\n")
++
++
++def retrieve_hits(
++    *,
++    client: Any,
++    session_id: str,
++    question: str,
++    memory_map: dict[str, Any],
++    top_k: int,
++    chunk_top_k: int,
++) -> dict[str, Any]:
++    session = client.with_session(session_id)
++    query = f"Question: {question}"
++    query_context = QUERY_CONTEXT_PROMPT.format(question=question)
++    raw_results = session.search(query, query_context=query_context, top_k=chunk_top_k)
++    ordered_ids = _ordered_chunk_ids(raw_results, memory_map)
++    id_segments = _result_segments_by_id(raw_results, memory_map)
++    raw_segment_count = len(_result_segments(raw_results))
++    oneshot_passes = 0
++
++    if raw_segment_count > 1:
++        ordered_ids, id_segments, oneshot_passes = _rerank_ordered_ids(
++            client=client,
++            query=query,
++            query_context=query_context,
++            results=raw_results,
++            ordered_ids=ordered_ids,
++            id_segments=id_segments,
++            memory_map=memory_map,
++            top_k=chunk_top_k,
++            passes=8,
++        )
++
++    hits = _fused_hits(
++        ordered_ids=ordered_ids,
++        id_segments=id_segments,
++        memory_map=memory_map,
++        chunk_top_k=chunk_top_k,
++        file_top_k=top_k,
++    )
++    return {
++        "hits": hits,
++        "raw_result_count": len(raw_results),
++        "raw_segment_count": raw_segment_count,
++        "oneshot_passes": oneshot_passes,
++        "search_query": query,
++        "query_context": query_context,
++    }
++
++
++def _rerank_ordered_ids(
++    *,
++    client: Any,
++    query: str,
++    query_context: str,
++    results: list[Any],
++    ordered_ids: list[str],
++    id_segments: dict[str, int | None],
++    memory_map: dict[str, Any],
++    top_k: int,
++    passes: int,
++) -> tuple[list[str], dict[str, int | None], int]:
++    current = results
++    pass_count = 0
++    seen_orders: set[tuple[str | None, ...]] = set()
++    for _ in range(passes):
++        memories = _memories_from_index_order(current, memory_map)
++        if not memories:
++            return ordered_ids, id_segments, pass_count
++        order = tuple(memory.get("id") for memory in memories)
++        if order in seen_orders:
++            return ordered_ids, id_segments, pass_count
++        seen_orders.add(order)
++        non_id_count = sum(1 for memory in memories if "id" not in memory)
++        reranked = client.oneshot_search(
++            query,
++            memories,
++            system=RERANK_SYSTEM_PROMPT,
++            query_context=query_context,
++            top_k=min(len(memories), non_id_count + top_k),
++        )
++        pass_count += 1
++        reranked_ids = _ordered_chunk_ids(reranked, memory_map)
++        if reranked_ids:
++            seen_reranked = set(reranked_ids)
++            ordered_ids = reranked_ids + [memory_id for memory_id in ordered_ids if memory_id not in seen_reranked]
++        id_segments.update(_result_segments_by_id(reranked, memory_map))
++        if len(_result_segments(reranked)) <= 1:
++            return ordered_ids, id_segments, pass_count
++        current = reranked
++    return ordered_ids, id_segments, pass_count
++
++
++def _memories_from_index_order(results: list[Any], memory_map: dict[str, Any]) -> list[dict[str, str]]:
++    text_by_id: dict[str, str] = {}
++    for result in results:
++        memory_id = getattr(result, "id", None)
++        text = getattr(result, "text", "") or ""
++        if isinstance(memory_id, str) and memory_id in memory_map and text and memory_id not in text_by_id:
++            text_by_id[memory_id] = text
++
++    memories: list[dict[str, str]] = []
++    current_file: str | None = None
++    for memory_id, location in memory_map.items():
++        text = text_by_id.get(memory_id)
++        if text is None:
++            continue
++        if location.file != current_file:
++            memories.append({"text": f"{FILE_HEADER_PREFIX}{location.file}"})
++            current_file = location.file
++        memories.append({"id": memory_id, "text": text})
++    return memories
++
++
++def _ordered_chunk_ids(results: list[Any], memory_map: dict[str, Any]) -> list[str]:
++    ordered_ids: list[str] = []
++    seen_ids: set[str] = set()
++    for result in results:
++        memory_id = getattr(result, "id", None)
++        if not isinstance(memory_id, str) or memory_id not in memory_map or memory_id in seen_ids:
++            continue
++        seen_ids.add(memory_id)
++        ordered_ids.append(memory_id)
++    return ordered_ids
++
++
++def _result_segments(results: list[Any]) -> set[int]:
++    return {
++        segment_id
++        for result in results
++        if isinstance((segment_id := getattr(result, "segment_id", None)), int)
++    }
++
++
++def _result_segments_by_id(results: list[Any], memory_map: dict[str, Any]) -> dict[str, int | None]:
++    id_segments: dict[str, int | None] = {}
++    for result in results:
++        memory_id = getattr(result, "id", None)
++        if not isinstance(memory_id, str) or memory_id not in memory_map or memory_id in id_segments:
++            continue
++        id_segments[memory_id] = getattr(result, "segment_id", None)
++    return id_segments
++
++
++def _fused_hits(
++    *,
++    ordered_ids: list[str],
++    id_segments: dict[str, int | None],
++    memory_map: dict[str, Any],
++    chunk_top_k: int,
++    file_top_k: int,
++) -> list[dict[str, Any]]:
++    chunk_hits: list[dict[str, Any]] = []
++    seen_ids: set[str] = set()
++    for memory_id in ordered_ids:
++        if memory_id not in memory_map or memory_id in seen_ids:
++            continue
++        seen_ids.add(memory_id)
++        location = memory_map[memory_id]
++        chunk_hits.append(
++            {
++                "path": location.file,
++                "start_line": location.start_line,
++                "end_line": location.end_line,
++                "chunk_rank": len(chunk_hits) + 1,
++                "memory_id": memory_id,
++                "segment_id": id_segments.get(memory_id),
++            }
++        )
++        if len(chunk_hits) >= chunk_top_k:
++            break
++
++    file_scores: dict[str, float] = {}
++    first_rank: dict[str, int] = {}
++    chunks_by_file: dict[str, list[dict[str, Any]]] = {}
++    for chunk in chunk_hits:
++        path = chunk["path"]
++        rank = chunk["chunk_rank"]
++        file_scores[path] = file_scores.get(path, 0.0) + 1.0 / math.log2(rank + 1)
++        first_rank.setdefault(path, rank)
++        chunks_by_file.setdefault(path, []).append(chunk)
++
++    ranked_paths = sorted(file_scores, key=lambda path: (-file_scores[path], first_rank[path], path))
++    hits: list[dict[str, Any]] = []
++    for file_rank, path in enumerate(ranked_paths[:file_top_k], 1):
++        ranges = _merge_ranges(
++            (chunk["start_line"], chunk["end_line"])
++            for chunk in chunks_by_file.get(path, [])
++        )
++        hits.append({"rank": file_rank, "path": path, "ranges": ranges})
++    return hits
++
++
++def _merge_ranges(ranges: Any) -> list[dict[str, int]]:
++    ordered = sorted((int(start), int(end)) for start, end in ranges if start and end)
++    merged: list[list[int]] = []
++    for start, end in ordered:
++        if not merged or start > merged[-1][1] + 1:
++            merged.append([start, end])
++        else:
++            merged[-1][1] = max(merged[-1][1], end)
++    return [{"start_line": start, "end_line": end} for start, end in merged]
++
++
++def _render_text(record: dict[str, Any]) -> str:
++    lines: list[str] = []
++    hits = record.get("hits", [])
++    if not hits:
++        return "No relevant files found."
++    for hit in hits:
++        range_text = _format_ranges(hit.get("ranges", []))
++        if range_text:
++            lines.append(f"{hit['rank']}. {hit['path']}:{range_text}")
++        else:
++            lines.append(f"{hit['rank']}. {hit['path']}")
++    return "\n".join(lines).rstrip()
++
++
++def _format_ranges(ranges: list[dict[str, int]]) -> str:
++    parts: list[str] = []
++    for item in ranges:
++        start = item.get("start_line")
++        end = item.get("end_line")
++        if isinstance(start, int) and isinstance(end, int):
++            parts.append(str(start) if start == end else f"{start}-{end}")
++    return ",".join(parts)
+diff --git a/attemory/scripts/repo_index.py b/attemory/scripts/repo_index.py
+new file mode 100644
+index 0000000..668af87
+--- /dev/null
++++ b/attemory/scripts/repo_index.py
+@@ -0,0 +1,434 @@
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import shutil
++import subprocess
++import sys
++import time
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++DEFAULT_CODE_SUFFIXES = {
++    ".bash",
++    ".c",
++    ".cc",
++    ".cmake",
++    ".cpp",
++    ".cs",
++    ".css",
++    ".cts",
++    ".cxx",
++    ".ex",
++    ".exs",
++    ".go",
++    ".h",
++    ".hh",
++    ".hpp",
++    ".hs",
++    ".htm",
++    ".html",
++    ".hxx",
++    ".java",
++    ".js",
++    ".jsx",
++    ".kt",
++    ".kts",
++    ".less",
++    ".lhs",
++    ".lua",
++    ".mjs",
++    ".mts",
++    ".php",
++    ".pxd",
++    ".pxi",
++    ".py",
++    ".pyi",
++    ".pyx",
++    ".rb",
++    ".rs",
++    ".sass",
++    ".sc",
++    ".scala",
++    ".scss",
++    ".sh",
++    ".svelte",
++    ".swift",
++    ".ts",
++    ".tsx",
++    ".vue",
++    ".zig",
++}
++SPECIAL_CODE_FILENAMES = {"BUILD", "BUILD.bazel", "CMakeLists.txt", "WORKSPACE"}
++SKIP_DIRS = {
++    ".git",
++    ".hg",
++    ".mypy_cache",
++    ".pytest_cache",
++    ".ruff_cache",
++    ".svn",
++    ".tox",
++    ".venv",
++    "__pycache__",
++    "build",
++    "dist",
++    "node_modules",
++    "site-packages",
++    "venv",
++}
++
++INDEX_FILE = "index.json"
++MAP_FILE = "chunks.jsonl"
++FILE_HEADER_PREFIX = "// the following code come from "
++TARGET_LINES_PER_BLOCK = 30
++BLANK_LINE_SEARCH_WINDOW = 10
++MIN_REMAINING_TOKENS = 5000
++SEARCH_SYSTEM_PROMPT = "Read the following code carefully and find the most relevant code to the query."
++CONTEXT_STRUCTURE = "system-v1-file-header-v1-code-chunk-v1"
++
++
++@dataclass(frozen=True)
++class CodeChunk:
++    id: str
++    file: str
++    start_line: int
++    end_line: int
++    text: str
++
++    @property
++    def lines(self) -> str:
++        return f"{self.start_line}-{self.end_line}"
++
++    @property
++    def memory_text(self) -> str:
++        return f"// {self.file}:{self.lines}\n{self.text}"
++
++
++@dataclass(frozen=True)
++class ChunkLocation:
++    file: str
++    start_line: int
++    end_line: int
++
++
++@dataclass(frozen=True)
++class IndexResult:
++    index_dir: Path
++    session_id: str
++    repo_name: str
++    repo_root: Path
++    repo_fingerprint: str
++    index_ms: float
++    memory_count: int
++    reused: bool
++    memory_map: dict[str, ChunkLocation]
++
++
++def make_attemory_client(*, host: str, port: int, timeout: float) -> Any:
++    try:
++        from attemory import AttemoryClient
++    except ModuleNotFoundError:
++        root_value = os.environ.get("ATTEMORY_ROOT") or _infer_attemory_root()
++        python_root = Path(root_value).expanduser() / "python" if root_value else None
++        if python_root is not None and python_root.is_dir() and str(python_root) not in sys.path:
++            sys.path.insert(0, str(python_root))
++        from attemory import AttemoryClient
++    return AttemoryClient(host=host, port=port, timeout=timeout)
++
++
++def _infer_attemory_root() -> str | None:
++    current = Path(__file__).resolve()
++    for parent in current.parents:
++        if (parent / "python" / "attemory").is_dir():
++            return str(parent)
++    return None
++
++
++def build_or_restore_index(
++    *,
++    client: Any,
++    repo_name: str,
++    repo_root: str | Path,
++    index_root: str | Path,
++    rebuild: bool = False,
++    chunk_lines: int = TARGET_LINES_PER_BLOCK,
++    blank_window: int = BLANK_LINE_SEARCH_WINDOW,
++) -> IndexResult:
++    repo_root = Path(repo_root).resolve()
++    index_root = Path(index_root).resolve()
++    fingerprint = repo_fingerprint(repo_root)
++    session_id = session_id_for_repo(repo_name, fingerprint)
++    index_dir = index_root / repo_name / fingerprint
++
++    if rebuild and index_dir.exists():
++        shutil.rmtree(index_dir)
++
++    if not rebuild and (index_dir / INDEX_FILE).exists() and (index_dir / MAP_FILE).exists():
++        return restore_index(client=client, repo_name=repo_name, repo_root=repo_root, index_root=index_root)
++
++    return fresh_index(
++        client=client,
++        repo_name=repo_name,
++        repo_root=repo_root,
++        index_dir=index_dir,
++        session_id=session_id,
++        fingerprint=fingerprint,
++        chunk_lines=chunk_lines,
++        blank_window=blank_window,
++    )
++
++
++def restore_index(
++    *,
++    client: Any,
++    repo_name: str,
++    repo_root: str | Path,
++    index_root: str | Path,
++) -> IndexResult:
++    repo_root = Path(repo_root).resolve()
++    index_root = Path(index_root).resolve()
++    fingerprint = repo_fingerprint(repo_root)
++    index_dir = index_root / repo_name / fingerprint
++    index_file = index_dir / INDEX_FILE
++    map_file = index_dir / MAP_FILE
++    if not index_file.exists() or not map_file.exists():
++        raise FileNotFoundError(
++            f"missing Attemory index for {repo_name}@{fingerprint} under {index_dir}; "
++            "run scripts/build_attemory_index.py before running search"
++        )
++
++    metadata = json.loads(index_file.read_text())
++    context_structure = metadata.get("context_structure")
++    if context_structure not in (None, CONTEXT_STRUCTURE):
++        raise RuntimeError(
++            f"existing Attemory index at {index_dir} has incompatible "
++            f"context_structure={context_structure!r}; rebuild it with scripts/build_attemory_index.py"
++        )
++
++    memory_map = _read_memory_map(map_file)
++    session_id = str(metadata.get("session_id") or session_id_for_repo(repo_name, fingerprint))
++    try:
++        client.restore_session(session_id=session_id)
++    except Exception as exc:
++        raise RuntimeError(
++            f"failed to restore Attemory index session {session_id!r} from {index_dir}; "
++            "start the matching Attemory server/session store or rebuild the index"
++        ) from exc
++
++    return IndexResult(
++        index_dir=index_dir,
++        session_id=session_id,
++        repo_name=repo_name,
++        repo_root=repo_root,
++        repo_fingerprint=fingerprint,
++        index_ms=0.0,
++        memory_count=len(memory_map),
++        reused=True,
++        memory_map=memory_map,
++    )
++
++
++def fresh_index(
++    *,
++    client: Any,
++    repo_name: str,
++    repo_root: Path,
++    index_dir: Path,
++    session_id: str,
++    fingerprint: str,
++    chunk_lines: int,
++    blank_window: int,
++) -> IndexResult:
++    start = time.perf_counter()
++    chunks = build_chunks(repo_root, chunk_lines=chunk_lines, blank_window=blank_window)
++    memory_map = {
++        chunk.id: ChunkLocation(
++            file=chunk.file,
++            start_line=chunk.start_line,
++            end_line=chunk.end_line,
++        )
++        for chunk in chunks
++    }
++
++    try:
++        client.delete_session(session_id=session_id)
++    except Exception:
++        pass
++
++    session = client.with_session(session_id)
++    session.create_session(kv_persist=True)
++    usage = session.add_system(SEARCH_SYSTEM_PROMPT)
++    current_file: str | None = None
++    for chunk in chunks:
++        if current_file != chunk.file:
++            if usage.remaining_tokens < MIN_REMAINING_TOKENS:
++                session.next_segment()
++            usage = session.add_memory(_file_header(chunk.file))
++            if usage.remaining_tokens < MIN_REMAINING_TOKENS:
++                session.next_segment()
++            current_file = chunk.file
++        usage = session.add_memory({"id": chunk.id, "text": chunk.memory_text})
++        if usage.remaining_tokens < MIN_REMAINING_TOKENS:
++            session.next_segment()
++
++    session.index_session()
++    session.save_session()
++    index_ms = (time.perf_counter() - start) * 1000
++
++    index_dir.mkdir(parents=True, exist_ok=True)
++    (index_dir / INDEX_FILE).write_text(
++        json.dumps(
++            {
++                "repo_name": repo_name,
++                "repo_root": str(repo_root),
++                "repo_fingerprint": fingerprint,
++                "session_id": session_id,
++                "chunk_lines": chunk_lines,
++                "blank_window": blank_window,
++                "context_structure": CONTEXT_STRUCTURE,
++                "file_header_prefix": FILE_HEADER_PREFIX,
++                "kv_persist": True,
++                "system_prompt": SEARCH_SYSTEM_PROMPT,
++                "memory_count": len(memory_map),
++                "created_at": int(time.time()),
++            },
++            indent=2,
++            sort_keys=True,
++        )
++    )
++    with (index_dir / MAP_FILE).open("w", encoding="utf-8") as f:
++        for memory_id, location in memory_map.items():
++            f.write(json.dumps({"id": memory_id, **asdict(location)}, ensure_ascii=False) + "\n")
++
++    return IndexResult(
++        index_dir=index_dir,
++        session_id=session_id,
++        repo_name=repo_name,
++        repo_root=repo_root,
++        repo_fingerprint=fingerprint,
++        index_ms=index_ms,
++        memory_count=len(memory_map),
++        reused=False,
++        memory_map=memory_map,
++    )
++
++
++def build_chunks(
++    repo_root: str | Path,
++    *,
++    chunk_lines: int = TARGET_LINES_PER_BLOCK,
++    blank_window: int = BLANK_LINE_SEARCH_WINDOW,
++) -> list[CodeChunk]:
++    repo_root = Path(repo_root).resolve()
++    chunks: list[CodeChunk] = []
++    for file_path in list_code_files(repo_root):
++        rel_path = file_path.relative_to(repo_root).as_posix()
++        try:
++            text = file_path.read_text(errors="ignore")
++        except OSError:
++            continue
++        lines = text.splitlines()
++        for start_line, end_line in _line_blocks(lines, chunk_lines=chunk_lines, blank_window=blank_window):
++            block = "\n".join(lines[start_line - 1 : end_line])
++            if not block.strip():
++                continue
++            chunks.append(
++                CodeChunk(
++                    id=_chunk_id(rel_path, start_line, end_line),
++                    file=rel_path,
++                    start_line=start_line,
++                    end_line=end_line,
++                    text=block,
++                )
++            )
++    return chunks
++
++
++def list_code_files(repo_root: str | Path) -> list[Path]:
++    repo_root = Path(repo_root).resolve()
++    files: list[Path] = []
++    for root, dirnames, filenames in os.walk(repo_root):
++        dirnames[:] = sorted(dirname for dirname in dirnames if dirname not in SKIP_DIRS)
++        root_path = Path(root)
++        for filename in sorted(filenames):
++            path = root_path / filename
++            if _is_code_file(path):
++                files.append(path)
++    return files
++
++
++def repo_fingerprint(repo_root: str | Path) -> str:
++    repo_root = Path(repo_root).resolve()
++    result = subprocess.run(
++        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
++        text=True,
++        capture_output=True,
++        check=False,
++    )
++    if result.returncode == 0 and result.stdout.strip():
++        return result.stdout.strip()[:12]
++
++    digest = hashlib.sha1()
++    for path in list_code_files(repo_root):
++        stat = path.stat()
++        digest.update(path.relative_to(repo_root).as_posix().encode())
++        digest.update(str(stat.st_mtime_ns).encode())
++        digest.update(str(stat.st_size).encode())
++    return f"nogit-{digest.hexdigest()[:12]}"
++
++
++def session_id_for_repo(repo_name: str, fingerprint: str) -> str:
++    raw = f"attemory-sweqa-{repo_name}-{fingerprint}"
++    return "".join(char if char.isalnum() or char in "-_" else "-" for char in raw)
++
++
++def _line_blocks(lines: list[str], *, chunk_lines: int, blank_window: int) -> list[tuple[int, int]]:
++    blocks: list[tuple[int, int]] = []
++    start = 1
++    total = len(lines)
++    while start <= total:
++        end = min(total, start + chunk_lines - 1)
++        if end < total:
++            search_to = min(total, end + blank_window)
++            for candidate in range(end, search_to + 1):
++                if not lines[candidate - 1].strip():
++                    end = candidate
++                    break
++        blocks.append((start, end))
++        start = end + 1
++    return blocks
++
++
++def _is_code_file(path: Path) -> bool:
++    return path.name in SPECIAL_CODE_FILENAMES or path.suffix.lower() in DEFAULT_CODE_SUFFIXES
++
++
++def _chunk_id(file_path: str, start_line: int, end_line: int) -> str:
++    digest = hashlib.sha1(f"{file_path}:{start_line}:{end_line}".encode()).hexdigest()[:12]
++    return f"{digest}:{file_path}:{start_line}-{end_line}"
++
++
++def _file_header(file_path: str) -> str:
++    return f"{FILE_HEADER_PREFIX}{file_path}"
++
++
++def _read_memory_map(path: Path) -> dict[str, ChunkLocation]:
++    memory_map: dict[str, ChunkLocation] = {}
++    with path.open(encoding="utf-8") as f:
++        for line in f:
++            if not line.strip():
++                continue
++            row = json.loads(line)
++            memory_id = row.pop("id")
++            if "start_line" not in row or "end_line" not in row:
++                start, end = str(row["lines"]).split("-", 1)
++                row["start_line"] = int(start)
++                row["end_line"] = int(end)
++            memory_map[memory_id] = ChunkLocation(
++                file=row["file"],
++                start_line=int(row["start_line"]),
++                end_line=int(row["end_line"]),
++            )
++    return memory_map
+diff --git a/attemory/scripts/run_sweqa.py b/attemory/scripts/run_sweqa.py
+new file mode 100755
+index 0000000..3436904
+--- /dev/null
++++ b/attemory/scripts/run_sweqa.py
+@@ -0,0 +1,226 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import concurrent.futures
++import json
++import os
++import subprocess
++import uuid
++from pathlib import Path
++from typing import Any
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SCRIPT_DIR = Path(__file__).resolve().parent
++WORKSPACE = ROOT.parent
++DEFAULT_BENCH_ROOT = WORKSPACE if (WORKSPACE / "Benchmark").is_dir() else WORKSPACE / "SWE-QA-Bench"
++DEFAULT_REPOS_ROOT = DEFAULT_BENCH_ROOT / "datas" / "repos"
++FALLBACK_REPOS_ROOT = DEFAULT_BENCH_ROOT / "datas"
++DEFAULT_TOOLS = "Task,Bash,Read,Grep,Glob"
++DEFAULT_ALLOWED_TOOLS = (
++    "Task,Read,Grep,Glob,Bash(pwd:*),Bash(ls:*),Bash(find:*),Bash(rg:*),Bash(grep:*),"
++    "Bash(sed:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(awk:*),"
++    "Bash(cut:*),Bash(sort:*),Bash(uniq:*)"
++)
++DEFAULT_DISALLOWED_TOOLS = "Edit,Write,WebFetch,WebSearch"
++FALSE_VALUES = {"0", "false", "no", "off"}
++
++from claude_stream import diagnose_submission, extract_submission, parse_stream_json, summarize_tools, summarize_usage
++from make_readable_prompts import prepare_prompts
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="SWE-QA runner for Claude Code.")
++    parser.add_argument("backend", choices=["default", "attemory"])
++    parser.add_argument("repo")
++    parser.add_argument("--workers", "--worker", type=int, default=int(os.environ.get("WORKERS", "1")))
++    parser.add_argument("--sample-id", action="append")
++    args = parser.parse_args()
++
++    python_paths = [str(SCRIPT_DIR), str(ROOT)]
++    attemory_root = os.environ.get("ATTEMORY_ROOT") or _infer_attemory_root()
++    if attemory_root:
++        python_paths.append(str(Path(attemory_root) / "python"))
++    if os.environ.get("PYTHONPATH"):
++        python_paths.append(os.environ["PYTHONPATH"])
++    os.environ["PYTHONPATH"] = ":".join(python_paths)
++
++    run_name = f"{args.backend}_{_path_name(args.repo)}"
++    run_dir = Path(os.environ.get("RUN_DIR", str(ROOT / "logs" / run_name)))
++    output = Path(os.environ.get("OUTPUT", str(ROOT / "output" / f"{run_name}.jsonl")))
++    repos_root = Path(os.environ["REPOS_ROOT"]) if os.environ.get("REPOS_ROOT") else _default_repos_root(args.repo)
++    repo_root = repos_root / args.repo
++
++    prepare_prompts(backend=args.backend, repo=args.repo, run_dir=run_dir, sample_ids=_split_sample_ids(args.sample_id))
++
++    sample_ids = [line for line in (run_dir / "samples.txt").read_text(encoding="utf-8").splitlines() if line]
++    if args.workers <= 1:
++        for sample_id in sample_ids:
++            run_one_sample(repo_root, run_dir, sample_id)
++    else:
++        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
++            futures = {
++                executor.submit(run_one_sample, repo_root, run_dir, sample_id): sample_id
++                for sample_id in sample_ids
++            }
++            for future in concurrent.futures.as_completed(futures):
++                future.result()
++
++    collect_run(args.backend, run_dir, output)
++    print(f"wrote {output}")
++
++
++def run_one_sample(repo_root: Path, run_dir: Path, sample_id: str) -> None:
++    sample_dir = run_dir / sample_id
++    print(f"=== {sample_id} ===", flush=True)
++    result = run_claude(
++        repo_root,
++        sample_dir / "prompt.txt",
++        sample_dir / "claude_stream.jsonl",
++        sample_dir / "claude_stderr.log",
++    )
++    (sample_dir / "exit_code").write_text(f"{result.returncode}\n", encoding="utf-8")
++    print_sample_summary(sample_id, result.returncode, sample_dir / "claude_stream.jsonl")
++
++
++def run_claude(repo_root: Path, prompt_path: Path, stdout_path: Path, stderr_path: Path) -> subprocess.CompletedProcess:
++    tools = os.environ.get("CLAUDE_TOOLS") or DEFAULT_TOOLS
++    allowed_tools = os.environ.get("ALLOWED_TOOLS") or DEFAULT_ALLOWED_TOOLS
++    disallowed_tools = os.environ.get("DISALLOWED_TOOLS") or DEFAULT_DISALLOWED_TOOLS
++    env = os.environ.copy()
++    _isolate_claude_home(env, stdout_path.parent)
++    command: list[Any] = [
++        os.environ.get("CLAUDE_BIN") or "claude",
++        "-p",
++        prompt_path.read_text(encoding="utf-8"),
++        "--output-format",
++        "stream-json",
++        "--verbose",
++        "--no-session-persistence",
++        "--permission-mode",
++        os.environ.get("PERMISSION_MODE", "dontAsk"),
++        "--tools",
++        tools,
++        "--allowed-tools",
++        allowed_tools,
++        "--disallowed-tools",
++        disallowed_tools,
++    ]
++    model = os.environ.get("CLAUDE_MODEL") or os.environ.get("MODEL")
++    if model:
++        command += ["--model", model]
++
++    completed = subprocess.run(
++        [str(arg) for arg in command],
++        cwd=repo_root,
++        env=env,
++        text=True,
++        capture_output=True,
++    )
++    stdout_path.write_text(completed.stdout or "", encoding="utf-8")
++    stderr_path.write_text(completed.stderr or "", encoding="utf-8")
++    return completed
++
++
++def collect_run(backend: str, run_dir: Path, output: Path) -> None:
++    output.parent.mkdir(parents=True, exist_ok=True)
++    with output.open("w", encoding="utf-8") as f:
++        for sample_id in (run_dir / "samples.txt").read_text(encoding="utf-8").splitlines():
++            if sample_id:
++                f.write(json.dumps(_collect_one(backend, run_dir / sample_id), ensure_ascii=False) + "\n")
++
++
++def _collect_one(backend: str, sample_dir: Path) -> dict[str, Any]:
++    sample = json.loads((sample_dir / "sample.json").read_text(encoding="utf-8"))
++    stdout = (sample_dir / "claude_stream.jsonl").read_text(encoding="utf-8", errors="ignore")
++    stderr_path = sample_dir / "claude_stderr.log"
++    stderr = stderr_path.read_text(encoding="utf-8", errors="ignore") if stderr_path.exists() else ""
++    events = parse_stream_json(stdout)
++    submission = extract_submission(events, stdout)
++    exit_code_path = sample_dir / "exit_code"
++    exit_code = int(exit_code_path.read_text(encoding="utf-8").strip() or "0") if exit_code_path.exists() else 0
++
++    record = {
++        "sample_id": sample["sample_id"],
++        "repo": sample["repo"],
++        "question": sample["question"],
++        "reference_answer": sample["reference_answer"],
++        "submission": submission,
++        "answer": submission,
++        "backend": f"cc_{backend}",
++        "exit_status": "success" if exit_code == 0 else f"returncode_{exit_code}",
++        "usage": summarize_usage(events),
++        "tool_stats": summarize_tools(events),
++        "paths": {
++            "prompt": str((sample_dir / "prompt.txt").resolve()),
++            "claude_stream": str((sample_dir / "claude_stream.jsonl").resolve()),
++            "claude_stderr": str(stderr_path.resolve()),
++            "attemory_traj": str((sample_dir / "attemory_search.jsonl").resolve()) if backend == "attemory" else None,
++        },
++        "raw": sample["raw"],
++    }
++    submission_issue = diagnose_submission(events, stdout, submission)
++    if submission_issue:
++        record["submission_issue"] = submission_issue
++    if backend == "attemory":
++        traj = sample_dir / "attemory_search.jsonl"
++        if traj.exists() and traj.read_text(encoding="utf-8").strip():
++            record["attemory_presearch"] = json.loads(traj.read_text(encoding="utf-8").splitlines()[-1])
++    if exit_code != 0:
++        record["stderr_tail"] = stderr[-4000:]
++    return record
++
++
++def print_sample_summary(sample_id: str, returncode: int, stream_path: Path) -> None:
++    events = parse_stream_json(stream_path.read_text(encoding="utf-8", errors="ignore"))
++    usage = summarize_usage(events)
++    tools = summarize_tools(events)
++    print(
++        f"{sample_id} returncode={returncode} "
++        f"tokens={usage.get('total_reported_tokens', 0)} "
++        f"input={usage.get('input_tokens', 0)} "
++        f"cached={usage.get('cache_read_input_tokens', 0)} "
++        f"output={usage.get('output_tokens', 0)} "
++        f"cost={usage.get('total_cost_usd', 0)} "
++        f"tools={tools.get('tool_call_count', 0)}",
++        flush=True,
++    )
++
++
++def _split_sample_ids(values: list[str] | None) -> list[str] | None:
++    if not values:
++        return None
++    sample_ids = [item.strip() for value in values for item in value.split(",") if item.strip()]
++    return sample_ids or None
++
++
++def _path_name(value: str) -> str:
++    return value.replace("-", "_")
++
++
++def _default_repos_root(repo_name: str) -> Path:
++    if (DEFAULT_REPOS_ROOT / repo_name).exists():
++        return DEFAULT_REPOS_ROOT
++    if (FALLBACK_REPOS_ROOT / repo_name).exists():
++        return FALLBACK_REPOS_ROOT
++    return DEFAULT_REPOS_ROOT
++
++
++def _isolate_claude_home(env: dict[str, str], sample_dir: Path) -> None:
++    if env.get("CLAUDE_ISOLATE_HOME", "1").lower() in FALSE_VALUES:
++        return
++    home = sample_dir / ".claude_home" / uuid.uuid4().hex
++    home.mkdir(parents=True, exist_ok=True)
++    env["HOME"] = str(home)
++
++
++def _infer_attemory_root() -> str | None:
++    for parent in Path(__file__).resolve().parents:
++        if (parent / "python" / "attemory").is_dir():
++            return str(parent)
++    return None
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/attemory/scripts/summarize_run.py b/attemory/scripts/summarize_run.py
+new file mode 100644
+index 0000000..0570381
+--- /dev/null
++++ b/attemory/scripts/summarize_run.py
+@@ -0,0 +1,215 @@
++import argparse
++import csv
++import json
++from pathlib import Path
++
++
++FIELDS = [
++    "sample_id",
++    "main_tokens",
++    "subagent_tokens",
++    "total_tokens",
++    "main_turns",
++    "subagent_turns",
++    "subagent_calls",
++]
++
++
++def read_jsonl(path):
++    rows = []
++    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
++        try:
++            obj = json.loads(line)
++        except json.JSONDecodeError:
++            continue
++        if isinstance(obj, dict):
++            rows.append(obj)
++    return rows
++
++
++def token_sum(data, keys):
++    return sum(int(data.get(key, 0) or 0) for key in keys if isinstance(data.get(key, 0), int | float))
++
++
++def latest_result(events):
++    for event in reversed(events):
++        if event.get("type") == "result":
++            return event
++    return {}
++
++
++def result_tokens(result):
++    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
++    if isinstance(usage.get("total_tokens"), int):
++        return usage["total_tokens"]
++    return token_sum(usage, ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"])
++
++
++def sample_id(sample_dir):
++    path = sample_dir / "sample.json"
++    if path.exists():
++        try:
++            value = json.loads(path.read_text(encoding="utf-8")).get("sample_id")
++        except json.JSONDecodeError:
++            value = None
++        if value:
++            return value
++    return sample_dir.name
++
++
++def sample_dirs(run_dir):
++    samples_txt = run_dir / "samples.txt"
++    if samples_txt.exists():
++        names = [line.strip() for line in samples_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
++        return [run_dir / name for name in names if (run_dir / name / "claude_stream.jsonl").exists()]
++    return sorted(path for path in run_dir.iterdir() if (path / "claude_stream.jsonl").exists())
++
++
++def assistant_message(event):
++    message = event.get("message")
++    if isinstance(message, dict) and message.get("role") == "assistant":
++        return message
++    return None
++
++
++def subagent_tool_ids(events):
++    ids = {
++        event.get("tool_use_id") or event.get("task_id")
++        for event in events
++        if event.get("type") == "system" and event.get("subtype") == "task_started"
++    }
++    ids.discard(None)
++    if ids:
++        return ids
++
++    # Older Claude Code logs may not have task_started events, so fall back to
++    # top-level Agent/Task tool_use blocks.
++    for event in events:
++        if event.get("parent_tool_use_id"):
++            continue
++        message = assistant_message(event)
++        if not message or not isinstance(message.get("content"), list):
++            continue
++        for block in message["content"]:
++            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
++                ids.add(block.get("id"))
++    ids.discard(None)
++    return ids
++
++
++def subagent_tokens(events, tool_ids):
++    # Parent-marked assistant messages are the subagent's intermediate model
++    # calls. Deduplicate by message id because one message can be streamed as
++    # separate thinking/tool_use chunks with the same usage.
++    parent_usage = {}
++    for event in events:
++        parent = event.get("parent_tool_use_id")
++        message = assistant_message(event)
++        if parent not in tool_ids or not message:
++            continue
++        usage = message.get("usage")
++        if isinstance(usage, dict):
++            parent_usage[(parent, message.get("id"))] = token_sum(
++                usage,
++                ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"],
++            )
++
++    # The final Agent/Task result is reported on the top-level tool_result.
++    final_usage = 0
++    for event in events:
++        message = event.get("message")
++        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
++            continue
++        result_ids = {
++            block.get("tool_use_id")
++            for block in message["content"]
++            if isinstance(block, dict) and block.get("type") == "tool_result"
++        }
++        if not result_ids.intersection(tool_ids):
++            continue
++        tool_result = event.get("tool_use_result")
++        if isinstance(tool_result, dict):
++            final_usage += int(tool_result.get("totalTokens") or 0)
++
++    return sum(parent_usage.values()) + final_usage
++
++
++def summarize(sample_dir):
++    events = read_jsonl(sample_dir / "claude_stream.jsonl")
++    result = latest_result(events)
++    tool_ids = subagent_tool_ids(events)
++    main_tokens = result_tokens(result)
++    sub_tokens = subagent_tokens(events, tool_ids)
++
++    main_turns = int(result.get("num_turns") or 0)
++    if not main_turns:
++        main_turns = len(
++            {
++                assistant_message(event).get("id")
++                for event in events
++                if assistant_message(event) and not event.get("parent_tool_use_id")
++            }
++        )
++    sub_turns = len(
++        {
++            assistant_message(event).get("id")
++            for event in events
++            if assistant_message(event) and event.get("parent_tool_use_id")
++        }
++    )
++
++    return {
++        "sample_id": sample_id(sample_dir),
++        "main_tokens": main_tokens,
++        "subagent_tokens": sub_tokens,
++        "total_tokens": main_tokens + sub_tokens,
++        "main_turns": main_turns,
++        "subagent_turns": sub_turns,
++        "subagent_calls": len(tool_ids),
++    }
++
++
++def fmt(num):
++    if num >= 1_000_000:
++        return f"{num / 1_000_000:.2f}M"
++    if num >= 1_000:
++        return f"{num / 1_000:.1f}k"
++    return str(num)
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("run_dir", help="Example: logs/attemory_requests")
++    parser.add_argument("--csv", help="Optional CSV output path")
++    args = parser.parse_args()
++
++    rows = [summarize(path) for path in sample_dirs(Path(args.run_dir))]
++    totals = {key: sum(int(row[key]) for row in rows) for key in FIELDS if key != "sample_id"}
++
++    print(f"run_dir: {args.run_dir}")
++    print(f"samples: {len(rows)}")
++    print(
++        "tokens: "
++        f"main={fmt(totals['main_tokens'])} "
++        f"subagent={fmt(totals['subagent_tokens'])} "
++        f"total={fmt(totals['total_tokens'])}"
++    )
++    print(
++        "turns: "
++        f"main={fmt(totals['main_turns'])} "
++        f"subagent={fmt(totals['subagent_turns'])} "
++        f"subagent_calls={fmt(totals['subagent_calls'])}"
++    )
++    print("\n" + ",".join(FIELDS))
++    for row in rows:
++        print(",".join(str(row[key]) for key in FIELDS))
++
++    if args.csv:
++        with Path(args.csv).open("w", encoding="utf-8", newline="") as f:
++            writer = csv.DictWriter(f, fieldnames=FIELDS)
++            writer.writeheader()
++            writer.writerows(rows)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/attemory/config/deepseek.env.example b/attemory/config/deepseek.env.example
+new file mode 100644
+index 0000000..e1ba2fe
+--- /dev/null
++++ b/attemory/config/deepseek.env.example
+@@ -0,0 +1,26 @@
++# Fill this with the Claude Code + DeepSeek settings that already work on your machine.
++# Load it with: source config/deepseek.env
++
++# Claude Code executable. Leave CLAUDE_BIN empty to use `claude` from PATH.
++export CLAUDE_BIN=
++export CLAUDE_MAX_BUDGET_USD=
++
++# DeepSeek Anthropic-compatible Claude Code settings.
++export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
++export ANTHROPIC_AUTH_TOKEN=
++export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
++export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
++export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
++export ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
++export CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
++export CLAUDE_CODE_EFFORT_LEVEL=max
++
++# Optional: set ATTEMORY_ROOT only if the runner cannot auto-detect the parent
++# Attemory checkout. When prepared under benchmarks/, it is detected from ../../.
++export ATTEMORY_ROOT=
++export ATTEMORY_HOST=127.0.0.1
++export ATTEMORY_PORT=9006
++export ATTEMORY_TIMEOUT=3600
++export ATTEMORY_SEARCH_TOPK=8
++export ATTEMORY_CHUNK_TOPK=16
++export ATTEMORY_INDEX_ROOT=

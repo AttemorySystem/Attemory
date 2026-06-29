@@ -9,7 +9,8 @@ Usage:
   ./prepare_bench.sh longmemeval
   ./prepare_bench.sh locomo
   ./prepare_bench.sh semble
-  ./prepare_bench.sh longmemeval locomo semble
+  ./prepare_bench.sh sweqa
+  ./prepare_bench.sh longmemeval locomo semble sweqa
   ./prepare_bench.sh all
 
 This downloads the pinned upstream benchmark repos and applies the Attemory
@@ -111,6 +112,15 @@ prepare_locomo() {
     apply_patch_once EverOS locomo.patch
 }
 
+prepare_sweqa() {
+    download_git_commit \
+        SWE-QA-Bench \
+        https://github.com/peng-weihan/SWE-QA-Bench.git \
+        d7bf283d65f4bbdc86ead92fc130eee4986355f0
+
+    apply_patch_once SWE-QA-Bench sweqa.patch
+}
+
 if [ "$#" -eq 0 ]; then
     usage
     exit 1
@@ -127,10 +137,14 @@ for bench in "$@"; do
         locomo)
             prepare_locomo
             ;;
+        sweqa)
+            prepare_sweqa
+            ;;
         all)
             prepare_longmemeval
             prepare_semble
             prepare_locomo
+            prepare_sweqa
             ;;
         -h|--help|help)
             usage

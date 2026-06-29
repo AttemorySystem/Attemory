@@ -38,7 +38,8 @@ Only the raw corpus and raw benchmark query are used to run the benchmarks.
 | **LongMemEval-S** | memory retrieval, the split most memory systems evaluate | about 40 sessions / 115k tokens | **98.72% session Recall_any@5**, **92.77% session Recall_all@5**, **98.94% message Recall_all@50** |
 | **LongMemEval-M** | Million-token memory retrieval, a scale few memory systems attempt | about 500 sessions / 1.5M tokens / 5k messages | **94.89% session Recall_any@5**, **83.62% session Recall_all@5**, **92.55% message Recall_all@50** |
 | **LoCoMo** | End-to-end long-conversation QA | 10 long conversations / 1,540 QA items | **94.52% accuracy** with GPT-4.1-mini as answer model and GPT-4o-mini as judge |
-| **Semble** | Code retrieval | 63 repos / 19 languages / largest repo about 5M tokens | **0.9055 file-level NDCG@10** |
+| **Semble** | Code retrieval | 63 repos / 19 languages | **0.9055 file-level NDCG@10** |
+| **SWE-QA** | End-to-end code QA agent | 15 repos / 720 questions / largest repo index **9.47M tokens** | **43.8% fewer model tokens** with near-tied GPT-5.4 judge score, **83.17 vs 83.39** |
 
 The LongMemEval-M message-level result is the clearest signal of Attemory's
 capability: Attemory searches roughly **1.5M tokens** and **5k historical messages** per
@@ -46,10 +47,13 @@ query, then retrieves **all labeled evidence messages** within the top 50 messag
 for **92.55%** of answerable queries. This is the retrieval ability the agentic
 era needs: turning massive memory into compact, exact, actionable evidence.
 
-Semble shows the same idea outside chat memory. Attemory indexes code as raw
-code chunks and retrieves at chunk level, then maps evidence back to files.
-On the largest repository in the run, `zig`, it searches about **5M indexed
-tokens** and reaches **0.9565 file-level NDCG@10**.
+The code benchmarks show the same idea outside chat memory. On Semble,
+Attemory indexes code as raw code chunks and retrieves at chunk level, then maps
+evidence back to files. On SWE-QA, the same code-indexing path is used inside an
+end-to-end Claude Code workflow; the largest loaded repo index is `sympy` at
+**9.47M indexed tokens**. Across 15 repos and 720 questions, the Attemory hint
+run reduces Claude Code model tokens by **43.8%** while keeping GPT-5.4 judge
+score essentially tied with baseline.
 
 All benchmarks are **reproducible in a local environment**. See
 [`benchmarks/`](benchmarks/) for detailed results and run instructions.
@@ -93,10 +97,10 @@ the same context template and filtered again. This process repeats until the
 remaining results come from a single segment, which becomes the final retrieval
 result.
 
-These retrieval patterns are central to Attemory's results on LongMemEval-M and
-Semble benchmarks, where it delivers SOTA-class performance on million-token
-memory and large codebases. See [`benchmarks/README.md`](benchmarks/README.md)
-for details.
+These retrieval patterns are central to Attemory's results on LongMemEval-M,
+Semble, and SWE-QA, where it handles million-token memory and multi-million-token
+code indexes, including the **9.47M-token** `sympy` SWE-QA index. See
+[`benchmarks/README.md`](benchmarks/README.md) for details.
 
 ## Getting Started
 

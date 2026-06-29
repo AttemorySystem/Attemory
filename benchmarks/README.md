@@ -1,9 +1,11 @@
 # Attemory Benchmarks
 
-We use three public benchmarks to validate Attemory:
+We use four public benchmarks to validate Attemory:
 [LongMemEval](https://github.com/xiaowu0162/LongMemEval),
 [LoCoMo](https://github.com/snap-research/locomo), and
-[Semble](https://github.com/MinishLab/semble).
+[Semble](https://github.com/MinishLab/semble), plus
+[SWE-QA-Bench](https://github.com/peng-weihan/SWE-QA-Bench) as an
+agent-facing code QA workload.
 
 Together, they test retrieval accuracy, scalability, and universal retrieval
 across different data types:
@@ -11,9 +13,10 @@ across different data types:
 1. Long-term conversational memory retrieval at million-token scale.
 2. End-to-end long-conversation question answering.
 3. Codebase retrieval for software agents.
+4. End-to-end repository question answering with Claude Code.
 
-Attemory achieves SOTA-class results on all three benchmarks without
-benchmark-specific tuning. The same retrieval engine reads raw
+Attemory achieves SOTA-class results on the retrieval and memory benchmarks
+without benchmark-specific tuning. The same retrieval engine reads raw
 memories with attention, without summaries as the stored representation, query
 rewriting, agent-generated synthetic memories, graph schemas, or separate
 keyword/vector retrieval stacks.
@@ -26,6 +29,7 @@ keyword/vector retrieval stacks.
 | LongMemEval-M-cleaned | Retrieval-only long-term memory | about 500 sessions / 1.5M tokens / 4.9k messages | **94.89% session R_any@5**, **83.62% session R_all@5**, **92.55% message R_all@50** |
 | LoCoMo | End-to-end memory QA | 10 long conversations / 1,540 QA items | **94.52% accuracy** |
 | Semble | Code retrieval | 63 repos / 19 languages / largest repo about 5M tokens | **0.9055 file-level NDCG@10** |
+| SWE-QA | End-to-end code QA agent | 15 repos / 720 questions | **43.8% fewer model tokens** with near-tied GPT-5.4 judge score, **83.17 vs 83.39** |
 
 LongMemEval is reported at two levels. Session-level retrieval asks whether the
 system finds the correct historical sessions. Message-level retrieval is
@@ -42,20 +46,23 @@ Result artifacts:
 | LongMemEval | [`results/LongMemEval/`](results/LongMemEval/) |
 | LoCoMo | [`results/LoCoMo/`](results/LoCoMo/) |
 | Semble | [`results/semble/`](results/semble/) |
+| SWE-QA | [`results/SWEQA/`](results/SWEQA/) |
 
 ## Local Reproduction
 
-All three benchmarks can be prepared and run from this repository. LongMemEval
+All four benchmarks can be prepared and run from this repository. LongMemEval
 and Semble validate local retrieval directly and do not require cloud services
-or API keys. LoCoMo uses the EverOS end-to-end answer-and-judge harness; its LLM
-endpoint can be local or hosted. Hardware acceleration is recommended for
-running Attemory quickly on the larger benchmarks.
+or API keys. LoCoMo uses the EverOS end-to-end answer-and-judge harness, and
+SWE-QA uses Claude Code plus an LLM judge; those LLM endpoints can be local or
+hosted. Hardware acceleration is recommended for running Attemory quickly on the
+larger benchmarks.
 
 ```bash
 cd benchmarks
 ./prepare_bench.sh longmemeval
 ./prepare_bench.sh locomo
 ./prepare_bench.sh semble
+./prepare_bench.sh sweqa
 ```
 
 You can also prepare everything at once:
@@ -65,16 +72,17 @@ cd benchmarks
 ./prepare_bench.sh all
 ```
 
-Start an Attemory server separately before running a benchmark. For LoCoMo, the
-answer and judge stages use an OpenAI-compatible endpoint configured through
-`LLM_API_KEY` and `LLM_BASE_URL`; those variables may point to a local model
-server or to a hosted API.
+Start an Attemory server separately before running a benchmark. LoCoMo and
+SWE-QA also need OpenAI-compatible or Claude-Code-compatible LLM endpoints for
+their answer/judge stages; those endpoints may point to local model servers or
+hosted APIs.
 
 Detailed run instructions:
 
 - LongMemEval retrieval: [`LongMemEval.md`](LongMemEval.md)
 - LoCoMo with EverOS/EverCore: [`LoCoMo.md`](LoCoMo.md)
 - Semble code retrieval: [`semble.md`](semble.md)
+- SWE-QA with Claude Code: [`sweqa.md`](sweqa.md)
 
 ## Benchmark Integrity
 
@@ -298,3 +306,35 @@ labels: in the annotation set we inspected, 1457 of 1491 targets are path-only
 and only 34 include line spans.
 
 Detailed method: [`semble.md`](semble.md)
+
+## SWE-QA
+
+[SWE-QA-Bench](https://github.com/peng-weihan/SWE-QA-Bench) evaluates
+repository question answering. We run Claude Code on 15 pinned repositories and
+compare the normal read-only agent against the same agent with an Attemory
+semantic code-search hint injected before the agent loop starts.
+
+This benchmark is agent-facing rather than retrieval-only. The final metric is
+LLM-judged answer quality, and the main systems metric is Claude Code model
+token usage.
+
+The Attemory setup:
+
+- indexes each pinned repo commit as raw code chunks
+- adds no-id file headers for path context
+- searches with the clean SWE-QA question
+- reranks multi-segment search results with `oneshot_search`
+- fuses chunk hits into a compact file/range hint
+- lets Claude Code answer with normal read-only repository tools
+
+### Main Result
+
+| System | GPT-5.4 judge score | Model tokens | Turns | Tool calls |
+|---|---:|---:|---:|---:|
+| baseline Claude Code | **83.39** | 285.39M | 10491 | 26997 |
+| Claude Code + Attemory hint | 83.17 | **160.39M** | **8765** | **17340** |
+
+Attemory reduces model tokens by **43.8%** with a near-tied judge score
+(-0.23 average score over 720 paired samples).
+
+Detailed method and reproduction commands: [`sweqa.md`](sweqa.md)

@@ -289,8 +289,8 @@ static bool restore_segment_plan_from_cache_manifest(
     candidate.config.split_ratio = (float) kSegmentSoftLimitPercent / 100.0f;
     candidate.config.max_segments = kMaxSegmentsPerSession;
 
-    const int32_t soft_limit = segment_soft_limit(core, runtime);
-    if (soft_limit <= 0) {
+    const int32_t hard_limit = effective_context_limit(core, runtime);
+    if (hard_limit <= 0) {
         log_manifest_skip(run_log, session, "failed to resolve effective context length");
         return true;
     }
@@ -318,11 +318,11 @@ static bool restore_segment_plan_from_cache_manifest(
         segment.manual_start =
             manual_boundaries.find(manifest_segment.first_memory_idx) != manual_boundaries.end();
         segment.auto_split_start = !candidate.segments.empty() && !segment.manual_start;
-        if (segment.exact_tokens > soft_limit) {
+        if (segment.exact_tokens > hard_limit) {
             log_manifest_skip(
                 run_log,
                 session,
-                "segment exceeds soft limit: segment=" + std::to_string(segment.segment_id));
+                "segment exceeds context limit: segment=" + std::to_string(segment.segment_id));
             return true;
         }
 

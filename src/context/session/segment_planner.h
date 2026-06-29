@@ -11,7 +11,7 @@
 namespace attemory::context {
 
 inline constexpr int32_t kMaxSegmentsPerSession = 100;
-inline constexpr int32_t kSegmentSoftLimitPercent = 90;
+inline constexpr int32_t kSegmentSoftLimitPercent = 85;
 
 int32_t segment_soft_limit(
     atmcore::Runtime * core,

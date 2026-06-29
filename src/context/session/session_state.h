@@ -23,7 +23,7 @@ struct Segment {
 struct SegmentPlanConfig {
     std::string model_cache_key;
     int32_t ctx_limit = 0;
-    float split_ratio = 0.90f;
+    float split_ratio = 0.85f;
     int32_t max_segments = 100;
 };
 

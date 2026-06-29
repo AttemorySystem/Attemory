@@ -277,6 +277,11 @@ if (ATTEMORY_BUILD_TESTS)
         LIBS attemory_context
         LABELS unit
     )
+    attemory_add_cpp_test(attemory_segment_planner_test
+        SOURCES tests/segment_planner_test.cpp
+        LIBS attemory_context
+        LABELS unit
+    )
     attemory_add_cpp_test(attemory_persistent_session_test
         SOURCES tests/persistent_session_test.cpp
         LIBS attemory_persistent

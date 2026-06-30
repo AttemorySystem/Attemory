@@ -1,114 +1,91 @@
 <p align="center">
-  <img src="assets/attemory_logo.png" alt="Attemory" width="320"><br><b>Retrieval by attending. Search with reasoning.</b>
+  <img src="assets/attemory_logo.png" alt="Attemory" width="320"><br><b>Cut agent token usage with high-recall memory retrieval.</b>
 </p>
 
-Attemory is an attention-native retrieval engine that turns large corpora into
-model-readable memory and reusable KV cache. It retrieves by letting a model
-attend directly over that memory, delivering high-recall retrieval at scale,
-validated by SOTA-class results across [several benchmarks](#benchmark-results).
+Attemory is a semantic retrieval engine for long memory, documents, and
+codebases. It turns large corpora into model-readable memory and retrieves
+relevant evidence by letting a local model attend over that memory, rather than
+relying only on keyword matching or embedding similarity.
 
-Because retrieval runs through the model's attention path, Attemory can find
-evidence by reasoning over meaning, constraints, entities, and context, rather
-than relying on keyword matching or embedding similarity alone. The same
-mechanism works across conversations, documents, codebases, and long-term
-memory.
+For AI agents, this means large repositories and long histories can be indexed
+once, then searched before the expensive model starts its own exploration.
+Instead of spending tokens on broad grep/read loops, repeated file inspection,
+and exploratory subagents, the agent gets compact evidence to inspect first.
 
-Attemory makes this practical at million-token scale. With partial prefill,
-KV-cache reuse, and decode-free ranking, it avoids token-by-token generation
-and turns massive memory into compact, AI-agent-ready evidence sets.
+On [SWE-QA](benchmarks/sweqa.md), adding one Attemory semantic-search hint
+before Claude Code reduced model tokens by **43.8%** while keeping answer
+quality essentially tied: **83.17 vs 83.39** under a GPT-5.4 judge across
+**15 repositories and 720 questions**.
 
-## Capabilities
+## Agent Token Savings
 
-| Capability | What it enables |
-| --- | --- |
-| **Search with reasoning** | Retrieval can follow constraints, combine clues, use dates, names, and infer what memory would answer the real question. Prompts can guide Attemory toward different retrieval behaviors. |
-| **Universal retrieval** | One system works for conversations, long-term memory, codebases, and any domain where LLMs work. |
-| **Million-token scalability** | Million-token memories become compact evidence sets that downstream agents can actually use. |
-| **Unified search** | Exact lookup, fuzzy lookup, entity relationships, and task context live in one context/query format and can be retrieved through natural language. No separate keyword, vector, and graph stack is required. |
+The SWE-QA comparison keeps the downstream agent the same and changes only the
+initial context:
 
-## Benchmark Results
+```text
+Baseline: Claude Code + read-only tools + Task subagents + DeepSeek v4
+Attemory: Claude Code + read-only tools + Task subagents + DeepSeek v4
+          + one pre-run Attemory semantic-search hint
+```
 
-Attemory reaches SOTA-class results across several benchmarks with **no
-benchmark-specific hacks**: no query rewrite, no summarization,
-no agent-driven exploration, and no external cloud services for retrieval.
-Only the raw corpus and raw benchmark query are used to run the benchmarks.
+Attemory only gives it likely files and line ranges before the
+agent loop starts.
+
+| System | Judge score | Model tokens | Main-agent tokens | Subagent tokens | Tool calls | Cost estimate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline | 83.39 | 285.39M | 122.60M | 162.80M | 26,997 | $453.47 |
+| Attemory hint | 83.17 | 160.39M | 86.60M | 73.79M | 17,340 | $296.68 |
+| Change | -0.23 | **-43.8%** | **-29.4%** | **-54.7%** | **-35.8%** | **-34.6%** |
+
+> `Cost estimate` is the `total_cost_usd` value emitted by Claude Code in the
+> final `stream-json` result event. See [Claude Code documents](https://code.claude.com/docs/en/statusline)
+
+The token drop comes from giving Claude Code a better starting point before it
+begins repository exploration. The main agent still has normal read-only tools,
+but it performs fewer broad search/read loops and launches fewer exploratory
+subagent calls. See [the SWE-QA benchmark note](benchmarks/sweqa.md) for the
+full per-repo breakdown, methodology, and reproduction commands.
+
+## Retrieval Quality
+
+Token savings only matter if recall stays high. Attemory reaches SOTA-class
+results across long conversations, million-token memory, and multi-language
+codebases. LongMemEval-M is especially important: its context is long enough
+that few memory systems evaluate on it directly, while Attemory still retrieves
+all labeled evidence messages in the top 50 for **92.55%** of answerable
+queries.
 
 | Benchmark | What it tests | Context size | Attemory result |
 | --- | --- | ---: | --- |
-| **LongMemEval-S** | memory retrieval, the split most memory systems evaluate | about 40 sessions / 115k tokens | **98.72% session Recall_any@5**, **92.77% session Recall_all@5**, **98.94% message Recall_all@50** |
-| **LongMemEval-M** | Million-token memory retrieval, a scale few memory systems attempt | about 500 sessions / 1.5M tokens / 5k messages | **94.89% session Recall_any@5**, **83.62% session Recall_all@5**, **92.55% message Recall_all@50** |
-| **LoCoMo** | End-to-end long-conversation QA | 10 long conversations / 1,540 QA items | **94.52% accuracy** with GPT-4.1-mini as answer model and GPT-4o-mini as judge |
-| **Semble** | Code retrieval | 63 repos / 19 languages | **0.9055 file-level NDCG@10** |
-| **SWE-QA** | End-to-end code QA agent | 15 repos / 720 questions / largest repo index **9.47M tokens** | **43.8% fewer model tokens** with near-tied GPT-5.4 judge score, **83.17 vs 83.39** |
+| [LongMemEval-S](benchmarks/LongMemEval.md) | memory retrieval, the split most memory systems evaluate | about 40 sessions / 115k tokens | **98.72% session Recall_any@5**, **92.77% session Recall_all@5**, **98.94% message Recall_all@50** |
+| [LongMemEval-M](benchmarks/LongMemEval.md) | Million-token memory retrieval, a scale few memory systems attempt | about 500 sessions / 1.5M tokens / 5k messages | **94.89% session Recall_any@5**, **83.62% session Recall_all@5**, **92.55% message Recall_all@50** |
+| [LoCoMo](benchmarks/LoCoMo.md) | End-to-end long-conversation QA | 10 long conversations / 1,540 QA items | **94.52% accuracy** with GPT-4.1-mini as answer model and GPT-4o-mini as judge |
+| [Semble](benchmarks/semble.md) | Code retrieval | 63 repos / 19 languages | **0.9055 file-level NDCG@10** |
+| [SWE-QA](benchmarks/sweqa.md) | End-to-end code QA agent | 15 repos / 720 questions / largest repo index **9.47M tokens** | **43.8% fewer model tokens** with near-tied GPT-5.4 judge score, **83.17 vs 83.39** |
 
-The LongMemEval-M message-level result is the clearest signal of Attemory's
-capability: Attemory searches roughly **1.5M tokens** and **5k historical messages** per
-query, then retrieves **all labeled evidence messages** within the top 50 messages
-for **92.55%** of answerable queries. This is the retrieval ability the agentic
-era needs: turning massive memory into compact, exact, actionable evidence.
+Together with SWE-QA, these results show the same engine working as memory
+retrieval, code retrieval, and an agent-context reduction layer. Detailed
+results and run instructions are in [`benchmarks/`](benchmarks/).
 
-The code benchmarks show the same idea outside chat memory. On Semble,
-Attemory indexes code as raw code chunks and retrieves at chunk level, then maps
-evidence back to files. On SWE-QA, the same code-indexing path is used inside an
-end-to-end Claude Code workflow; the largest loaded repo index is `sympy` at
-**9.47M indexed tokens**. Across 15 repos and 720 questions, the Attemory hint
-run reduces Claude Code model tokens by **43.8%** while keeping GPT-5.4 judge
-score essentially tied with baseline.
+## How It Works
 
-All benchmarks are **reproducible in a local environment**. See
-[`benchmarks/`](benchmarks/) for detailed results and run instructions.
+Attemory runs as a local retrieval service:
 
-## Technologies
+1. Index long memory, documents, or code into reusable KV state.
+2. Search that memory with a local retrieval model instead of keyword or vector
+   similarity alone.
+3. Return compact evidence: memory ids, text snippets, or file and line ranges
+   that a downstream agent can inspect first.
 
-Attemory retrieves through the same core mechanism that made LLMs powerful:
-attention. Memories are indexed as reusable KV state, so the query can
-attend over memory context and use the transformer's reasoning path to decide
-what is relevant.
+The retrieval path uses Qwen3.5 model tiers from `tiny` to `large`, with CUDA
+GPU and Apple Metal acceleration available for local indexing and search. For
+the context template, segment refinement, persistence, and API details, see
+[`doc/usage.md`](doc/usage.md).
 
-Partial prefill and decode-free ranking make this practical, and the prefill path is heavily
-optimized for speed.
-KV quantization reduces memory and storage cost, while CUDA GPU and Apple Metal
-backends accelerate indexing and search on local hardware.
+## Install
 
-Under the hood, Attemory uses Qwen3.5 as the default retrieval model, with model tiers
-from 0.8B (`tiny`) to 2B (`small`), 4B (`medium`), and 9B (`large`) for higher
-retrieval quality.
-
-## The New Retrieval Paradigm
-
-Attemory treats retrieval as attention over a structured context template. The
-template contains the system prompt, memory, query context, and final query; the
-data to be searched is placed in the memory section, and the model retrieves by
-attending over the resulting context. See
-[`doc/usage.md#the-context-structure`](doc/usage.md#the-context-structure) for
-the concrete structure.
-
-While building Attemory, we found two patterns that consistently improve
-retrieval quality. The first is query repetition with retrieval guidance, a
-manual CoT-like way to guide the retrieval process: repeat the question in the
-query context, then add instructions about what the model should focus
-on before the final query. This creates a more deliberate retrieval path and
-helps the model rank memories according to the user's actual constraints. The
-[example](examples/weekly_diary.py) shows this pattern in practice.
-
-The second pattern is iterative filtering for long contexts. Attemory splits large memory into segments(due to it's limited context size) and searches each
-segment independently. The results from each segment are then placed back into
-the same context template and filtered again. This process repeats until the
-remaining results come from a single segment, which becomes the final retrieval
-result.
-
-These retrieval patterns are central to Attemory's results on LongMemEval-M,
-Semble, and SWE-QA, where it handles million-token memory and multi-million-token
-code indexes, including the **9.47M-token** `sympy` SWE-QA index. See
-[`benchmarks/README.md`](benchmarks/README.md) for details.
-
-## Getting Started
-
-Attemory is under active development, and behavior may change between versions.
-It currently supports Linux and macOS. Hardware acceleration is available on
-NVIDIA CUDA and Apple Metal now.
-
-Install Attemory:
+Attemory supports Linux and macOS. Hardware acceleration is available on NVIDIA
+CUDA and Apple Metal.
 
 ```bash
 uv pip install attemory           # macOS Apple Silicon, includes Metal runtime
@@ -128,10 +105,8 @@ pip install "attemory[cuda]" \
   --extra-index-url https://attemorysystem.github.io/Attemory/whl/cu126/
 ```
 
-On macOS Apple Silicon, `attemory` automatically installs the Metal-capable
-runtime, which can run both `--backend metal` and `--backend cpu`. On Linux, a
-bare `attemory` install only installs the Python package; choose `cpu` or a CUDA
-extra explicitly. Use `cuda-cu126` by default:
+On macOS Apple Silicon, `attemory` automatically installs the Metal runtime. On
+Linux, choose `cpu` or a CUDA extra explicitly. Use `cuda-cu126` by default:
 
 ```bash
 pip install "attemory[cuda]" \
@@ -149,7 +124,7 @@ pip install "attemory[cuda-cu129]" \
 Use `cuda-cu124` or `cuda-cu121` only when your NVIDIA driver is too old for
 CUDA 12.6.
 
-Start a local server:
+Start a local server, then connect with the Python client:
 
 ```bash
 attemory-server --small --backend gpu --port 9006
@@ -157,31 +132,12 @@ attemory-server --small --backend metal --port 9006
 attemory-server --tiny --backend cpu --port 9006
 ```
 
-Tier choice depends on hardware and quality requirements. Practical starting
-points are `--tiny` for CPU or small local tests, `--small` for GPUs with about
-5 GB VRAM, `--medium` for about 8 GB VRAM, and `--large` for about 12 GB VRAM.
-Actual memory use also depends on context length and KV type.
+## Quick Example
 
-Persistent session data is stored on disk. Saved segment KV cache data is stored
-on disk after `save_session()` or when a session is created with
-`kv_persist=True` and indexed. By default, session data uses
-`$XDG_DATA_HOME/attemory/sessions` or `~/.local/share/attemory/sessions`, and KV
-cache data uses `$XDG_CACHE_HOME/attemory` or `~/.cache/attemory`. Use
-`ATTEMORY_DATA_DIR`, `ATTEMORY_CACHE_DIR`, or `--cache-dir` when you need
-explicit storage paths.
-
-For the full usage guide, including Python APIs, CLI commands, server options,
-model tiers, context templates, and persistence, see [`doc/usage.md`](doc/usage.md).
-
-## Example
-
-The repository includes a small weekly diary example that shows the basic
-Attemory workflow: create a session, add memories, index the session, and search
-with natural language.
+Create a session, add memory, index once, and retrieve compact evidence by id:
 
 ```bash
-attemory-server --large --backend gpu --port 9006 &
-python examples/weekly_diary.py
+attemory-server --small --backend gpu --port 9006
 ```
 
 ```python
@@ -191,16 +147,11 @@ client = AttemoryClient(host="127.0.0.1", port=9006, session_id="weekly-diary")
 client.create_session()
 
 client.add_system(
-    "Read the following weekly diary entries carefully and answer the query at the end."
+    "Read the memory carefully and retrieve the evidence that answers the query."
 )
-
-# Context lines have no id. They structure the memory without becoming returned evidence.
-client.add_memory(MemoryInput(text="[Wednesday]"))
-
-# Raw memories keep user-owned ids. Attemory returns these ids in search results.
 client.add_memory(
     MemoryInput(
-        id="20",
+        id="diary-20",
         text="In the evening, I had dinner with Clara at a Japanese restaurant.",
     )
 )
@@ -208,7 +159,7 @@ client.add_memory(
 client.index_session()
 
 results = client.search(
-    "Who did I have dinner with at Japanese restaurant?",
+    "Who did I have dinner with at the Japanese restaurant?",
     top_k=3,
 )
 
@@ -216,41 +167,9 @@ for result in results:
     print(result.id, result.text)
 ```
 
-Example output with the large tier:
-
-```text
-== Direct fact ==
-query: Who did I have dinner with at Japanese restaurant?
---- Results ---
-rank=1 line=20 text=In the evening, I had dinner with Clara at a Japanese restaurant. ✓
-rank=2 line=34 text=In the evening, I had dinner with Emma at a small French bistro.
-
-== Query context: evening social activity ==
-query: Who did I meet on Thursday?
-query_context: The user is asking about social activities at evening.
---- Results ---
-rank=1 line=27 text=In the evening, I had dinner with David at a Korean barbecue restaurant. ✓
-rank=2 line=25 text=Later, I met my parents at town center, we had happy lunch together.
-
-== Query context: family communication ==
-query: Who did I meet on Thursday?
-query_context: The user is asking about family activities at noon.
---- Results ---
-rank=1 line=25 text=Later, I met my parents at town center, we had happy lunch together. ✓
-rank=2 line=27 text=In the evening, I had dinner with David at a Korean barbecue restaurant.
-
-== Temporal reasoning ==
-query: Assume today is Thursday, who did I have dinner with yesterday?
-query_context: The user's query: Assume today is Thursday, who did I have dinner with yesterday?
-Resolve relative date into target date before ranking diary entries.
---- Results ---
-rank=1 line=20 text=In the evening, I had dinner with Clara at a Japanese restaurant. ✓
-rank=2 line=13 text=In the evening, I had dinner with Ben at an Italian place.
-```
-
-This is the core Python API: add context and memories, build the index, then
-retrieve ranked memory ids and text. See [`examples/weekly_diary.py`](examples/weekly_diary.py)
-for a complete runnable version.
+The same API can return chat memories, document snippets, or code chunks. See
+[`examples/weekly_diary.py`](examples/weekly_diary.py) for a complete runnable
+example and [`doc/usage.md`](doc/usage.md) for the full API guide.
 
 ## Build From Source
 

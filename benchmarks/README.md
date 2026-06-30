@@ -318,6 +318,22 @@ This benchmark is agent-facing rather than retrieval-only. The final metric is
 LLM-judged answer quality, and the main systems metric is Claude Code model
 token usage.
 
+The compared systems are:
+
+```text
+Baseline run:
+  Claude Code + read-only tools + DeepSeek v4 model + Task subagents
+
+Attemory run:
+  Claude Code + read-only tools + DeepSeek v4 model + Task subagents
+  + one pre-run Attemory semantic retrieval hint
+```
+
+The downstream agent is unchanged. It can ignore the hint, inspect the
+repository normally with `Read`, `Grep`, `Glob`, `Bash`, and `Task`, and launch
+subagents. Attemory is not exposed as an interactive tool during the run; it
+only supplies a compact file/range hint before Claude Code starts.
+
 The Attemory setup:
 
 - indexes each pinned repo commit as raw code chunks
@@ -335,6 +351,7 @@ The Attemory setup:
 | Claude Code + Attemory hint | 83.17 | **160.39M** | **8765** | **17340** |
 
 Attemory reduces model tokens by **43.8%** with a near-tied judge score
-(-0.23 average score over 720 paired samples).
+(-0.23 average score over 720 paired samples). The reduction is visible in both
+main-agent and subagent tokens in the detailed SWE-QA report.
 
 Detailed method and reproduction commands: [`sweqa.md`](sweqa.md)

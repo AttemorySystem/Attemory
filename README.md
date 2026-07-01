@@ -31,7 +31,7 @@ Attemory: Claude Code + read-only tools + Task subagents + DeepSeek v4
 Attemory only gives it likely files and line ranges before the
 agent loop starts.
 
-| System | Judge score | Model tokens | Main-agent tokens | Subagent tokens | Tool calls | Cost estimate |
+| system | judge score | total tokens | main-agent tokens | subagent tokens | tool calls | cost estimate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Baseline | 83.39 | 285.39M | 122.60M | 162.80M | 26,997 | $453.47 |
 | Attemory hint | 83.17 | 160.39M | 86.60M | 73.79M | 17,340 | $296.68 |
@@ -55,17 +55,20 @@ that few memory systems evaluate on it directly, while Attemory still retrieves
 all labeled evidence messages in the top 50 for **92.55%** of answerable
 queries.
 
+These results come without benchmark-specific hacks: no query rewrite, no
+summarization, no agent-driven exploration, and no external cloud services for
+retrieval. Only the raw corpus and raw benchmark query are used to run the
+benchmarks.
+
 | Benchmark | What it tests | Context size | Attemory result |
 | --- | --- | ---: | --- |
 | [LongMemEval-S](benchmarks/LongMemEval.md) | memory retrieval, the split most memory systems evaluate | about 40 sessions / 115k tokens | **98.72% session Recall_any@5**, **92.77% session Recall_all@5**, **98.94% message Recall_all@50** |
 | [LongMemEval-M](benchmarks/LongMemEval.md) | Million-token memory retrieval, a scale few memory systems attempt | about 500 sessions / 1.5M tokens / 5k messages | **94.89% session Recall_any@5**, **83.62% session Recall_all@5**, **92.55% message Recall_all@50** |
 | [LoCoMo](benchmarks/LoCoMo.md) | End-to-end long-conversation QA | 10 long conversations / 1,540 QA items | **94.52% accuracy** with GPT-4.1-mini as answer model and GPT-4o-mini as judge |
 | [Semble](benchmarks/semble.md) | Code retrieval | 63 repos / 19 languages | **0.9055 file-level NDCG@10** |
-| [SWE-QA](benchmarks/sweqa.md) | End-to-end code QA agent | 15 repos / 720 questions / largest repo index **9.47M tokens** | **43.8% fewer model tokens** with near-tied GPT-5.4 judge score, **83.17 vs 83.39** |
 
-Together with SWE-QA, these results show the same engine working as memory
-retrieval, code retrieval, and an agent-context reduction layer. Detailed
-results and run instructions are in [`benchmarks/`](benchmarks/).
+All benchmarks are **reproducible in a local environment**. See
+[`benchmarks/`](benchmarks/) for detailed results and run instructions.
 
 ## How It Works
 
